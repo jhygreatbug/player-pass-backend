@@ -15,10 +15,34 @@ function detailPath(appId) {
   return `/api/v1/games/${appId}`;
 }
 
-test('正常详情：返回标准化字段并保留上游 HTML 原文', async (t) => {
-  const calls = installFetchMock(t, () =>
-    jsonResponse(steamDetailPayload(367520, steamDetailData()))
-  );
+const NORMAL_DETAIL = {
+  appId: 367520,
+  name: '空洞骑士',
+  description: '<p>在《空洞骑士》中打造属于自己的冒险之旅！</p>',
+  detailedDescription: '<p>探索幽深的洞穴，与被感染的生物战斗。</p>',
+  about: '<h2>关于这款游戏</h2><p>手绘风格的动作冒险游戏。</p>',
+  cover: 'https://cdn.example.com/367520/header.jpg',
+  capsule: 'https://cdn.example.com/367520/capsule_184x69.jpg',
+  screenshots: [
+    {
+      id: 0,
+      thumbnail: 'https://cdn.example.com/367520/ss1.600x338.jpg',
+      full: 'https://cdn.example.com/367520/ss1.1920x1080.jpg',
+    },
+  ],
+  developers: ['Team Cherry'],
+  publishers: ['Team Cherry'],
+  genres: ['动作', '独立'],
+  releaseDate: '2017 年 2 月 24 日',
+  platforms: { windows: true, mac: true, linux: true },
+  source: 'steam',
+  language: 'schinese',
+  sourceUrl: 'https://store.steampowered.com/app/367520/',
+};
+
+test('正常详情：返回标准化字段、完整 raw 数据和中文可用标记', async (t) => {
+  const raw = steamDetailData();
+  const calls = installFetchMock(t, () => jsonResponse(steamDetailPayload(367520, raw)));
 
   const response = await callWorker(workerRequest(detailPath(367520)));
   assert.equal(response.status, 200);
@@ -27,28 +51,9 @@ test('正常详情：返回标准化字段并保留上游 HTML 原文', async (t
   assert.deepEqual(body, {
     success: true,
     data: {
-      appId: 367520,
-      name: '空洞骑士',
-      description: '<p>在《空洞骑士》中打造属于自己的冒险之旅！</p>',
-      detailedDescription: '<p>探索幽深的洞穴，与被感染的生物战斗。</p>',
-      about: '<h2>关于这款游戏</h2><p>手绘风格的动作冒险游戏。</p>',
-      cover: 'https://cdn.example.com/367520/header.jpg',
-      capsule: 'https://cdn.example.com/367520/capsule_184x69.jpg',
-      screenshots: [
-        {
-          id: 0,
-          thumbnail: 'https://cdn.example.com/367520/ss1.600x338.jpg',
-          full: 'https://cdn.example.com/367520/ss1.1920x1080.jpg',
-        },
-      ],
-      developers: ['Team Cherry'],
-      publishers: ['Team Cherry'],
-      genres: ['动作', '独立'],
-      releaseDate: '2017 年 2 月 24 日',
-      platforms: { windows: true, mac: true, linux: true },
-      source: 'steam',
-      language: 'schinese',
-      sourceUrl: 'https://store.steampowered.com/app/367520/',
+      ...NORMAL_DETAIL,
+      chineseDataAvailable: true,
+      raw,
     },
   });
 
@@ -57,6 +62,23 @@ test('正常详情：返回标准化字段并保留上游 HTML 原文', async (t
   assert.equal(requested.searchParams.get('appids'), '367520');
   assert.equal(requested.searchParams.get('l'), 'schinese');
   assert.equal(requested.searchParams.get('cc'), 'cn');
+});
+
+test('raw 保留标准化字段之外的全部上游字段', async (t) => {
+  const raw = steamDetailData({
+    metacritic: { score: 87 },
+    categories: [{ id: 2, description: '单人' }],
+    movies: [{ id: 1, name: 'Trailer', thumbnail: 'https://img/movie.jpg' }],
+  });
+  installFetchMock(t, () => jsonResponse(steamDetailPayload(367520, raw)));
+
+  const response = await callWorker(workerRequest(detailPath(367520)));
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
+
+  assert.deepEqual(data.raw.metacritic, { score: 87 });
+  assert.deepEqual(data.raw.categories, [{ id: 2, description: '单人' }]);
+  assert.deepEqual(data.raw.movies, [{ id: 1, name: 'Trailer', thumbnail: 'https://img/movie.jpg' }]);
 });
 
 test('无效 AppID 返回 400 INVALID_PARAMS 且不请求 Steam', async (t) => {
@@ -88,56 +110,60 @@ test('Steam 详情响应中缺少对应 AppID 时返回 404', async (t) => {
   assert.equal((await response.json()).error.code, 'GAME_NOT_FOUND');
 });
 
-test('缺少游戏名称返回 422 CHINESE_DATA_UNAVAILABLE', async (t) => {
-  installFetchMock(t, () =>
-    jsonResponse(steamDetailPayload(367520, steamDetailData({ name: undefined })))
-  );
+test('缺少游戏名称时仍返回全部数据，仅标记中文不可用', async (t) => {
+  const raw = steamDetailData({ name: undefined });
+  installFetchMock(t, () => jsonResponse(steamDetailPayload(367520, raw)));
 
   const response = await callWorker(workerRequest(detailPath(367520)));
-  assert.equal(response.status, 422);
-  assert.equal((await response.json()).error.code, 'CHINESE_DATA_UNAVAILABLE');
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
+
+  assert.equal(data.name, null);
+  assert.equal(data.chineseDataAvailable, false);
+  assert.equal('name' in data.raw, false);
+  assert.equal(data.raw.short_description, raw.short_description);
 });
 
-test('缺少简介返回 422 CHINESE_DATA_UNAVAILABLE', async (t) => {
-  installFetchMock(t, () =>
-    jsonResponse(steamDetailPayload(367520, steamDetailData({ short_description: undefined })))
-  );
+test('缺少简介时仍返回全部数据，仅标记中文不可用', async (t) => {
+  const raw = steamDetailData({ short_description: undefined });
+  installFetchMock(t, () => jsonResponse(steamDetailPayload(367520, raw)));
 
   const response = await callWorker(workerRequest(detailPath(367520)));
-  assert.equal(response.status, 422);
-  assert.equal((await response.json()).error.code, 'CHINESE_DATA_UNAVAILABLE');
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
+
+  assert.equal(data.description, null);
+  assert.equal(data.chineseDataAvailable, false);
+  assert.equal('short_description' in data.raw, false);
 });
 
-test('简介只有英文时返回 422 CHINESE_DATA_UNAVAILABLE', async (t) => {
-  installFetchMock(t, () =>
-    jsonResponse(
-      steamDetailPayload(
-        367520,
-        steamDetailData({ short_description: 'Hollow Knight is a challenging adventure.' })
-      )
-    )
-  );
+test('简介只有英文时仍返回，标记中文不可用', async (t) => {
+  const raw = steamDetailData({
+    short_description: 'Hollow Knight is a challenging adventure.',
+  });
+  installFetchMock(t, () => jsonResponse(steamDetailPayload(367520, raw)));
 
   const response = await callWorker(workerRequest(detailPath(367520)));
-  assert.equal(response.status, 422);
-  const body = await response.json();
-  assert.equal(body.error.code, 'CHINESE_DATA_UNAVAILABLE');
-  assert.equal(body.success, false);
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
+
+  assert.equal(data.description, raw.short_description);
+  assert.equal(data.raw.short_description, raw.short_description);
+  assert.equal(data.chineseDataAvailable, false);
 });
 
-test('简介只有 HTML 标签时返回 422', async (t) => {
-  installFetchMock(t, () =>
-    jsonResponse(
-      steamDetailPayload(
-        367520,
-        steamDetailData({ short_description: '<br><img src="https://img/x.jpg">' })
-      )
-    )
-  );
+test('简介只有 HTML 标签时仍返回，标记中文不可用', async (t) => {
+  const raw = steamDetailData({
+    short_description: '<br><img src="https://img/x.jpg">',
+  });
+  installFetchMock(t, () => jsonResponse(steamDetailPayload(367520, raw)));
 
   const response = await callWorker(workerRequest(detailPath(367520)));
-  assert.equal(response.status, 422);
-  assert.equal((await response.json()).error.code, 'CHINESE_DATA_UNAVAILABLE');
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
+
+  assert.equal(data.chineseDataAvailable, false);
+  assert.equal(data.description, raw.short_description);
 });
 
 test('图片字段缺失时返回 null / 空数组而不是失败', async (t) => {

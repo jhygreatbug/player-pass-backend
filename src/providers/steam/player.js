@@ -17,17 +17,21 @@ function toIsoTime(value) {
 }
 
 function iconUrl(appId, hash) {
+  if (!Number.isSafeInteger(appId) || appId <= 0) return null;
   if (typeof hash !== 'string' || hash.trim() === '') return null;
   return `https://media.steampowered.com/steamcommunity/public/images/apps/${appId}/${hash}.jpg`;
 }
 
+// 保留每条上游游戏的全部字段，并补充 camelCase 便捷字段；不按 AppID/时长过滤。
 function normalizePlayerGame(game) {
-  if (!isPlainObject(game)) return null;
-  if (!Number.isSafeInteger(game.appid) || game.appid <= 0) return null;
-
+  const appId = Number.isSafeInteger(game.appid) && game.appid > 0 ? game.appid : null;
   return {
-    appId: game.appid,
-    name: typeof game.name === 'string' && game.name.trim() !== '' ? game.name : null,
+    ...game,
+    appId,
+    name:
+      typeof game.name === 'string' && game.name.trim() !== ''
+        ? game.name
+        : (game.name ?? null),
     playtimeForeverMinutes: toMinutes(game.playtime_forever),
     playtimeTwoWeeksMinutes: toMinutes(game.playtime_2weeks),
     lastPlayedAt: toIsoTime(game.rtime_last_played),
@@ -38,7 +42,7 @@ function normalizePlayerGame(game) {
 
 function normalizePlayerGames(games) {
   if (!Array.isArray(games)) return [];
-  return games.map(normalizePlayerGame).filter(Boolean);
+  return games.filter(isPlainObject).map(normalizePlayerGame);
 }
 
 async function fetchPlayerService(method, params, apiKey) {
@@ -84,7 +88,12 @@ export async function getSteamRecentlyPlayedGames(steamId, limit, apiKey) {
   }
 
   const games = normalizePlayerGames(response.games).slice(0, limit);
-  return { steamId, games, total: games.length };
+  return {
+    steamId,
+    games,
+    total: games.length,
+    upstreamTotal: Number.isSafeInteger(response.total_count) ? response.total_count : null,
+  };
 }
 
 export async function getSteamMostPlayedGames(steamId, limit, apiKey) {
@@ -109,7 +118,7 @@ export async function getSteamMostPlayedGames(steamId, limit, apiKey) {
     0
   );
   const games = allGames
-    .filter((game) => game.playtimeForeverMinutes > 0)
+    .slice()
     .sort((a, b) => b.playtimeForeverMinutes - a.playtimeForeverMinutes)
     .slice(0, limit);
 

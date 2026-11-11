@@ -2,11 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  assertChineseDetails,
   normalizeAppDetails,
   normalizeSearchResults,
 } from '../src/providers/steam/normalizer.js';
-import { AppError } from '../src/utils/errors.js';
 import { decodeHtmlEntities, htmlToPlainText } from '../src/utils/html.js';
 import {
   hasChineseCharacters,
@@ -16,28 +14,41 @@ import {
   parseSteamId,
 } from '../src/utils/validation.js';
 
-test('normalizeSearchResults 过滤无效项、去重并保持顺序', () => {
-  const games = normalizeSearchResults(
-    [
-      { type: 'app', id: 3, name: 'Third', tiny_image: 'https://img/3.jpg' },
-      { type: 'sub', id: 4, name: 'Not an app' },
-      { type: 'app', id: 1, name: 'First', tiny_image: null },
-      { type: 'app', id: 3, name: 'Third duplicated' },
-      { type: 'app', id: 0, name: 'Zero' },
-      { type: 'app', id: '2', name: 'String id' },
-      { type: 'app', id: 5, name: '   ' },
-      { type: 'app', id: 6 },
-    ],
-    10
-  );
+test('normalizeSearchResults 保留全部结果、顺序和原始字段，只按 limit 截断', () => {
+  const items = [
+    { type: 'app', id: 3, name: 'Third', tiny_image: 'https://img/3.jpg', price: { final: 100 } },
+    { type: 'sub', id: 4, name: 'Not an app' },
+    { type: 'app', id: 1, name: 'First', tiny_image: null },
+    { type: 'app', id: 3, name: 'Third duplicated' },
+    { type: 'app', id: 0, name: 'Zero' },
+    { type: 'app', id: '2', name: 'String id' },
+    { type: 'app', id: 5, name: '   ' },
+    { type: 'app', id: 6 },
+  ];
 
-  assert.deepEqual(games, [
-    { appId: 3, name: 'Third', image: 'https://img/3.jpg', source: 'steam' },
-    { appId: 1, name: 'First', image: null, source: 'steam' },
-  ]);
+  const games = normalizeSearchResults(items, 10);
+
+  assert.equal(games.length, 8);
+  assert.deepEqual(
+    games.map((game) => game.appId),
+    [3, 4, 1, 3, null, null, 5, 6]
+  );
+  assert.deepEqual(games[0], {
+    ...items[0],
+    appId: 3,
+    image: 'https://img/3.jpg',
+    source: 'steam',
+  });
+  assert.equal(games[1].type, 'sub');
+  assert.equal(games[1].appId, 4);
+  assert.equal(games[3].name, 'Third duplicated');
+  assert.equal(games[4].name, 'Zero');
+  assert.equal(games[5].id, '2');
+  assert.equal(games[6].name, '   ');
+  assert.equal(games[7].image, null);
 });
 
-test('normalizeSearchResults 遵守 limit 且容忍非数组输入', () => {
+test('normalizeSearchResults 只截断条数，不丢弃非对象项', () => {
   const items = Array.from({ length: 5 }, (_, index) => ({
     type: 'app',
     id: index + 1,
@@ -48,10 +59,15 @@ test('normalizeSearchResults 遵守 limit 且容忍非数组输入', () => {
   assert.equal(normalizeSearchResults(items, 2).length, 2);
   assert.deepEqual(normalizeSearchResults(null), []);
   assert.deepEqual(normalizeSearchResults([], 10), []);
+
+  const withNull = normalizeSearchResults([null, { type: 'app', id: 9, name: 'Nine' }], 10);
+  assert.equal(withNull.length, 2);
+  assert.equal(withNull[0], null);
+  assert.equal(withNull[1].appId, 9);
 });
 
-test('normalizeAppDetails 完成字段映射并保留 HTML 原文', () => {
-  const details = normalizeAppDetails(42, {
+test('normalizeAppDetails 完成字段映射、保留 raw 并标记中文可用', () => {
+  const raw = {
     name: 'Hollow Knight',
     short_description: '<b>中文简介</b>',
     detailed_description: '<p>详细描述</p>',
@@ -68,7 +84,10 @@ test('normalizeAppDetails 完成字段映射并保留 HTML 原文', () => {
     genres: [{ id: '1', description: '动作' }, { id: '2' }, 'bad'],
     release_date: { coming_soon: false, date: '2017 年 2 月 24 日' },
     platforms: { windows: true, mac: 'true', linux: 1 },
-  });
+    metacritic: { score: 90 },
+  };
+
+  const details = normalizeAppDetails(42, raw);
 
   assert.deepEqual(details, {
     appId: 42,
@@ -84,14 +103,18 @@ test('normalizeAppDetails 完成字段映射并保留 HTML 原文', () => {
     genres: ['动作'],
     releaseDate: '2017 年 2 月 24 日',
     platforms: { windows: true, mac: false, linux: false },
+    chineseDataAvailable: true,
+    raw,
     source: 'steam',
     language: 'schinese',
     sourceUrl: 'https://store.steampowered.com/app/42/',
   });
+  assert.equal(details.raw.metacritic.score, 90);
 });
 
 test('normalizeAppDetails 在可选字段缺失时返回 null 或空集合', () => {
-  const details = normalizeAppDetails(1, { name: 'X', short_description: '中文' });
+  const raw = { name: 'X', short_description: '中文' };
+  const details = normalizeAppDetails(1, raw);
 
   assert.equal(details.detailedDescription, null);
   assert.equal(details.about, null);
@@ -103,36 +126,38 @@ test('normalizeAppDetails 在可选字段缺失时返回 null 或空集合', () 
   assert.deepEqual(details.genres, []);
   assert.equal(details.releaseDate, null);
   assert.deepEqual(details.platforms, { windows: false, mac: false, linux: false });
+  assert.equal(details.chineseDataAvailable, true);
+  assert.deepEqual(details.raw, raw);
 });
 
 test('normalizeAppDetails 在 capsule_imagev5 缺失时回退到 capsule_image', () => {
   const details = normalizeAppDetails(1, { capsule_image: 'https://img/capsule.jpg' });
   assert.equal(details.capsule, 'https://img/capsule.jpg');
+  assert.equal(details.chineseDataAvailable, false);
 });
 
-test('assertChineseDetails 接受英文品牌名 + 中文简介', () => {
-  assert.doesNotThrow(() =>
-    assertChineseDetails({ name: 'Hollow Knight', description: '<p>这是一款动作冒险游戏。</p>' })
+test('chineseDataAvailable 根据名称与简介内容计算，不阻止返回', () => {
+  assert.equal(
+    normalizeAppDetails(1, {
+      name: 'Game',
+      short_description: 'Hollow Knight is a challenging adventure.',
+    }).chineseDataAvailable,
+    false
   );
-});
-
-test('assertChineseDetails 拒绝缺失名称、缺失简介、纯英文简介和纯 HTML', () => {
-  const cases = [
-    { name: null, description: '中文简介' },
-    { name: '游戏', description: null },
-    { name: 'Game', description: 'Hollow Knight is a challenging adventure.' },
-    { name: '游戏', description: '<br><img src="https://img/x.jpg">' },
-  ];
-
-  for (const details of cases) {
-    assert.throws(
-      () => assertChineseDetails(details),
-      (error) =>
-        error instanceof AppError &&
-        error.code === 'CHINESE_DATA_UNAVAILABLE' &&
-        error.status === 422
-    );
-  }
+  assert.equal(
+    normalizeAppDetails(1, {
+      name: '游戏',
+      short_description: '<br><img src="https://img/x.jpg">',
+    }).chineseDataAvailable,
+    false
+  );
+  assert.equal(
+    normalizeAppDetails(1, {
+      name: 'Game',
+      short_description: '<p>这是一款动作冒险游戏。</p>',
+    }).chineseDataAvailable,
+    true
+  );
 });
 
 test('hasChineseCharacters 只识别 CJK 字符', () => {
@@ -202,7 +227,7 @@ test('parseSteamId 拒绝非法 ID 与超出范围的好友码', () => {
   }
 });
 
-test('HTML 工具函数清理标签并解码实体（仅用于校验）', () => {
+test('HTML 工具函数清理标签并解码实体（用于中文可用性标记）', () => {
   assert.equal(htmlToPlainText('<p>你好<br>世界</p>'), '你好 世界');
   assert.equal(htmlToPlainText('&lt;中文&gt; &amp; <b>标签</b>'), '<中文> & 标签');
   assert.equal(decodeHtmlEntities('&#20320;&#x597D;'), '你好');

@@ -16,11 +16,11 @@
 
 | 能力 | 说明 |
 |---|---|
-| 游戏搜索 | 按关键词搜索 Steam 游戏，返回 AppID、名称、缩略图 |
-| 游戏详情 | 按 AppID 获取名称、简介、详细描述、封面、截图、开发商、发行商、类型、发行日期、平台 |
-| 玩家最近游玩 | 按 SteamID64 或数字好友码获取公开资料玩家最近两周游玩的游戏与时长 |
-| 玩家时长榜 | 按 SteamID64 或数字好友码获取公开资料玩家累计时长最长的游戏、总游玩时长与游戏数量 |
-| 中文校验 | 详情必须存在名称与官方简体中文简介，否则返回 `CHINESE_DATA_UNAVAILABLE` |
+| 游戏搜索 | 按关键词搜索 Steam 游戏，保留上游全部结果与字段，按 `limit` 截断 |
+| 游戏详情 | 按 AppID 返回标准化字段 + 完整上游 `raw` 数据（名称、简介、截图、开发商等） |
+| 玩家最近游玩 | 按 SteamID64 或数字好友码获取公开资料玩家最近两周游玩的游戏与时长，按 `limit` 截断 |
+| 玩家时长榜 | 按 SteamID64 或数字好友码获取玩家全部游戏，按累计时长降序，按 `limit` 截断 |
+| 中文标记 | 详情用 `chineseDataAvailable` 标记是否含官方简体中文，不因缺少中文而拒绝返回 |
 | 缓存 | 搜索 1 小时、详情 7 天、玩家最近游玩 15 分钟、玩家时长榜 6 小时（依赖部署环境的 Cache API 能力） |
 | 跨域 | 支持浏览器 CORS，可配置允许来源 |
 | 防护 | 参数校验、8 秒上游超时、错误码、按客户端频率限制 |
@@ -55,7 +55,7 @@ src/router.js          路由、参数校验、统一响应
 src/services/          业务编排、缓存读取/写入
   │            │
   ▼            ▼
-Cache API    src/providers/steam/   Steam 适配、标准化、中文校验
+Cache API    src/providers/steam/   Steam 适配、标准化、中文可用性标记
                    │
         ┌──────────┴──────────┐
         ▼                     ▼
@@ -95,12 +95,12 @@ store.steampowered.com   api.steampowered.com
 │   └── utils/
 │       ├── response.js             统一 JSON 响应
 │       ├── validation.js           参数校验、中文字符检测
-│       ├── html.js                 HTML 转纯文本（仅用于中文校验）
+│       ├── html.js                 HTML 转纯文本（用于中文可用性标记）
 │       └── errors.js               业务错误类型
 ├── test/
 │   ├── search.test.js              搜索接口测试
 │   ├── detail.test.js              详情接口测试
-│   ├── normalizer.test.js          标准化、中文校验、参数校验测试
+│   ├── normalizer.test.js          标准化、中文可用性标记、参数校验测试
 │   ├── cache.test.js               缓存命中/过期/失败降级/隔离测试
 │   ├── player.test.js              玩家最近游玩/时长榜/隐私/Key 测试
 │   └── helpers.js                  测试工具（模拟 fetch、构造响应）
@@ -215,10 +215,10 @@ npm test
 
 当前共 68 个测试，覆盖：
 
-- 搜索：中文/英文关键词、空关键词、超长关键词、空结果、异常结构、非 app 过滤、无效 AppID 过滤、去重、limit、非 JSON、HTTP 错误、超时（含响应体读取超时）。
-- 详情：正常详情、无效 AppID、游戏不存在、缺少名称、缺少简介、纯英文简介、纯 HTML 简介、图片/可选字段缺失、超时、非 JSON、`success=true` 但缺少 `data`。
-- 玩家数据：最近游玩、累计时长排序与汇总、缺失字段、无效 SteamID、好友码换算、limit、未配置 Key、私有资料、空列表、鉴权失败不泄露 Key、超时、缓存隔离。
-- 标准化与校验：字段映射、HTML 原文保留、capsule 回退、中文检测、AppID/limit/关键词校验、HTML 实体解码、SteamID/好友码/玩家 limit 校验。
+- 搜索：中文/英文关键词、空关键词、超长关键词、空结果、异常结构、保留非 app/重复/无效项、全量字段、limit 截断、非 JSON、HTTP 错误、超时（含响应体读取超时）。
+- 详情：正常详情、raw 全量字段、缺少名称/简介/中文仍返回、无效 AppID、游戏不存在、图片/可选字段缺失、超时、非 JSON、`success=true` 但缺少 `data`。
+- 玩家数据：最近游玩、累计时长排序与汇总、0 时长不过滤、原始字段、缺失字段、无效 SteamID、好友码换算、limit、未配置 Key、私有资料、空列表、鉴权失败不泄露 Key、超时、缓存隔离。
+- 标准化与校验：字段映射、HTML 原文保留、capsule 回退、中文可用性标记、AppID/limit/关键词校验、HTML 实体解码、SteamID/好友码/玩家 limit 校验。
 - 缓存：命中不重复请求、过期后重新请求、写入失败不影响响应、读取失败降级、不同 AppID 不串缓存、错误结果不缓存、Worker 全链路集成、workers.dev 下 `BYPASS`。
 - 接口行为：CORS 预检、来源白名单、405 方法限制、404 路由、429 频率限制。
 
@@ -326,25 +326,32 @@ GET /api/v1/games/search?q=Hollow%20Knight&limit=10
   "data": {
     "games": [
       {
-        "appId": 367520,
+        "type": "app",
+        "id": 367520,
         "name": "Hollow Knight",
+        "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/367520/.../capsule_231x87.jpg",
+        "price": { "currency": "CNY", "initial": 5800, "final": 5800 },
+        "metascore": "87",
+        "platforms": { "windows": true, "mac": true, "linux": true },
+        "appId": 367520,
         "image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/367520/.../capsule_231x87.jpg",
         "source": "steam"
       }
     ],
-    "total": 1
+    "total": 1,
+    "upstreamTotal": 1
   }
 }
 ```
 
 说明：
 
-- 只返回 `type=app` 的结果。
-- 过滤无效 AppID 与缺少名称的结果。
-- 按 AppID 去重，保留 Steam 原始返回顺序。
-- `total` 是本次实际返回的条数（搜索接口没有分页）。
-- 搜索结果中的 `name` 是 Steam 返回的原文，可能是英文；**不代表官方简体中文名称**。中文资料以详情接口的校验结果为准。
-- 搜索接口不保证结果一定具有简体中文资料，详情接口负责进一步校验。
+- 不再过滤 `type`、无效 AppID、缺少名称的结果，也不再按 AppID 去重；按 Steam 原始顺序返回。
+- 每条结果保留 Steam 的全部字段，并额外补充 `appId`、`image`、`source` 三个便捷字段；无效 `id` 的 `appId` 为 `null`。
+- `limit` 仅用于截断返回条数（默认 10，范围 1–10）。
+- `total` 是本次实际返回的条数；`upstreamTotal` 是 Steam 报告的匹配总数。
+- 搜索结果中的 `name` 是 Steam 返回的原文，可能是英文；**不代表官方简体中文名称**。详情接口会用 `chineseDataAvailable` 标记中文可用性。
+- Steam 搜索接口自身可能限制返回条数；本服务返回的是该接口给出的全部 `items`（再按 `limit` 截断）。
 
 ### 9.3 获取游戏详情
 
@@ -381,6 +388,15 @@ GET /api/v1/games/367520
       "mac": true,
       "linux": true
     },
+    "chineseDataAvailable": true,
+    "raw": {
+      "type": "game",
+      "steam_appid": 367520,
+      "short_description": "在《空洞骑士》中打造属于自己的冒险之旅！……",
+      "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/367520/.../header.jpg",
+      "categories": [{ "id": 2, "description": "单人" }],
+      "metacritic": { "score": 87 }
+    },
     "source": "steam",
     "language": "schinese",
     "sourceUrl": "https://store.steampowered.com/app/367520/"
@@ -393,8 +409,8 @@ GET /api/v1/games/367520
 | API 字段 | Steam 字段 | 缺失时 |
 |---|---|---|
 | `appId` | 路径参数 | — |
-| `name` | `data.name` | `null`（触发 422） |
-| `description` | `data.short_description` | `null`（触发 422） |
+| `name` | `data.name` | `null` |
+| `description` | `data.short_description` | `null` |
 | `detailedDescription` | `data.detailed_description` | `null` |
 | `about` | `data.about_the_game` | `null` |
 | `cover` | `data.header_image` | `null` |
@@ -409,13 +425,16 @@ GET /api/v1/games/367520
 | `source` | 固定 `steam` | — |
 | `language` | 固定 `schinese` | — |
 | `sourceUrl` | 由 AppID 构造的 Steam 商店地址 | — |
+| `chineseDataAvailable` | 由 `name` 与 `short_description` 计算 | `false` |
+| `raw` | Steam 返回的完整 `data` 对象 | `{}` |
 
 说明：
 
-- 缺少的可选字段返回 `null` 或空数组，不凭空补充内容。
+- 缺少的字段返回 `null` 或空数组，不凭空补充内容；缺少名称或中文简介不会再返回 422。
+- `raw` 包含 Steam 返回的全部上游字段（如 `type`、`steam_appid`、`categories`、`movies`、`metacritic`、各平台配置要求等），标准化字段只是常用字段的便捷映射。
 - 图片 URL 与 HTML 描述保留 Steam 上游真实内容，不做改写。
 - `detailedDescription`、`about`、`description` 可能包含 HTML；服务端保留原始格式，前端展示前必须自行清理（见第 11 节）。
-- 游戏名称允许是英文品牌名（例如 `Hollow Knight`）；中文简介必须存在且包含中文字符。
+- `language` 是请求的本地化语言，不代表数据一定为中文；请使用 `chineseDataAvailable` 判断。
 
 ### 9.4 玩家最近游玩
 
@@ -444,8 +463,13 @@ GET /api/v1/players/76561197960287930/recent?limit=10
     "steamId": "76561197960287930",
     "games": [
       {
-        "appId": 367520,
+        "appid": 367520,
         "name": "Hollow Knight",
+        "playtime_2weeks": 120,
+        "playtime_forever": 3000,
+        "img_icon_url": "xxxx",
+        "rtime_last_played": 1700000000,
+        "appId": 367520,
         "playtimeForeverMinutes": 3000,
         "playtimeTwoWeeksMinutes": 120,
         "lastPlayedAt": "2023-11-14T22:13:20.000Z",
@@ -453,7 +477,8 @@ GET /api/v1/players/76561197960287930/recent?limit=10
         "source": "steam"
       }
     ],
-    "total": 1
+    "total": 1,
+    "upstreamTotal": 1
   }
 }
 ```
@@ -462,6 +487,8 @@ GET /api/v1/players/76561197960287930/recent?limit=10
 
 - 数据来自 Steam Web API `IPlayerService/GetRecentlyPlayedGames`，统计窗口固定为最近两周。
 - 路径参数也接受 Steam 客户端的数字好友码（1–10 位，即 accountID）；服务端在本地用 BigInt 换算为 SteamID64 后再请求 Steam，不额外调用接口，响应中的 `steamId` 始终是换算后的 64 位 ID。
+- 每条游戏保留上游全部字段（`appid`、`playtime_2weeks`、`playtime_forever`、`img_icon_url`、`rtime_last_played` 等），并补充 camelCase 便捷字段；`limit` 只截断条数，不做额外内容过滤。
+- `total` 是本次返回条数，`upstreamTotal` 是 Steam 返回的 `total_count`。
 - 时长单位是分钟；`playtimeTwoWeeksMinutes` 为 0 表示最近两周没有记录。
 - `lastPlayedAt` 为 ISO 8601 时间，缺失时为 `null`。
 - 只有玩家“游戏详情”隐私为公开时才返回数据；私有、仅好友或没有数据时返回 404 `PLAYER_DATA_UNAVAILABLE`。无法区分“资料未公开”和“确实没有最近游玩记录”，前端应提示“暂无数据或资料未公开”。
@@ -483,8 +510,13 @@ GET /api/v1/players/76561197960287930/most-played?limit=10
     "steamId": "76561197960287930",
     "games": [
       {
-        "appId": 367520,
+        "appid": 367520,
         "name": "Hollow Knight",
+        "playtime_2weeks": 0,
+        "playtime_forever": 3000,
+        "img_icon_url": "xxxx",
+        "rtime_last_played": 1700000000,
+        "appId": 367520,
         "playtimeForeverMinutes": 3000,
         "playtimeTwoWeeksMinutes": 0,
         "lastPlayedAt": "2023-11-14T22:13:20.000Z",
@@ -502,7 +534,8 @@ GET /api/v1/players/76561197960287930/most-played?limit=10
 说明：
 
 - 数据来自 `IPlayerService/GetOwnedGames`，包含已游玩过的免费游戏。
-- 服务端按 `playtime_forever` 降序排序，过滤掉累计时长为 0 的游戏，再取 `limit` 条；Steam 没有“按游玩时长排序”的参数。
+- 服务端按 `playtime_forever` 降序排序，**不再过滤 0 时长游戏**，然后按 `limit` 截断；Steam 没有“按游玩时长排序”的参数。
+- 每条游戏保留上游全部字段，并补充 camelCase 便捷字段。
 - `ownedGameCount` 是玩家拥有的游戏总数（不受 `limit` 影响）。
 - `totalPlaytimeMinutes` 是所有拥有游戏的累计时长总和（分钟）。
 - 隐私限制与 9.4 相同。
@@ -513,8 +546,8 @@ GET /api/v1/players/76561197960287930/most-played?limit=10
 {
   "success": false,
   "error": {
-    "code": "CHINESE_DATA_UNAVAILABLE",
-    "message": "该游戏没有可用的官方简体中文资料"
+    "code": "PLAYER_DATA_UNAVAILABLE",
+    "message": "玩家资料不可用或未公开"
   }
 }
 ```
@@ -525,7 +558,6 @@ GET /api/v1/players/76561197960287930/most-played?limit=10
 | `INVALID_STEAM_ID` | 400 | SteamID 不是合法的 64 位个人账号 ID 或数字好友码 |
 | `GAME_NOT_FOUND` | 404 | 游戏不存在或无法获取 |
 | `PLAYER_DATA_UNAVAILABLE` | 404 | 玩家资料不可用、未公开或没有记录 |
-| `CHINESE_DATA_UNAVAILABLE` | 422 | 缺少符合要求的简体中文资料 |
 | `UPSTREAM_ERROR` | 502 | Steam 接口异常（HTTP 错误、非 JSON、结构异常、API Key 被拒绝） |
 | `UPSTREAM_TIMEOUT` | 504 | Steam 请求超时（8 秒） |
 | `RATE_LIMITED` | 429 | 客户端请求频率超限 |
@@ -573,9 +605,6 @@ if (!result.success) {
     case 'GAME_NOT_FOUND':
       // 游戏不存在
       break;
-    case 'CHINESE_DATA_UNAVAILABLE':
-      // 缺少官方简体中文资料
-      break;
     case 'UPSTREAM_TIMEOUT':
     case 'UPSTREAM_ERROR':
       // 上游暂时不可用，可提示稍后重试
@@ -584,9 +613,13 @@ if (!result.success) {
       break;
   }
 }
+
+if (result.success && !result.data.chineseDataAvailable) {
+  // 缺少官方简体中文简介，可按需降级展示
+}
 ```
 
-前端可以区分：搜索成功、没有搜索结果（`success: true` 且 `games: []`）、游戏不存在、缺少官方简体中文资料、上游暂时不可用。
+前端可以区分：搜索成功、没有搜索结果（`success: true` 且 `games: []`）、游戏不存在、上游暂时不可用；详情是否具有中文资料由 `chineseDataAvailable` 标记，不再用 422 错误表示。
 
 玩家数据（最近游玩 / 时长榜）：
 
@@ -678,7 +711,7 @@ GET https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=<KEY>&stea
   - 搜索结果的 `name` 是 Steam 搜索索引中的原文（经常是英文），不能当作官方简体中文名称。
   - `appdetails` 对不存在的 AppID 返回 HTTP 200 + `{"<appid>":{"success":false}}`，本项目转换为 404 `GAME_NOT_FOUND`。
   - 不同游戏的字段完整度差异很大：有的没有截图、发行日期、开发商等；缺失字段按约定返回 `null` 或 `[]`。
-- 中文内容固定请求 `schinese` 本地化。详情接口只有在名称存在且简介包含中文字符时才返回成功，不会用英文资料冒充中文。
+- 中文内容固定请求 `schinese` 本地化，但不再因缺少中文资料而拒绝返回；详情接口用 `chineseDataAvailable` 标记，不会把英文资料冒充为中文。
 - 玩家接口只在目标玩家“游戏详情”隐私为公开时返回数据；私有、仅好友或没有记录返回空 `response`，本项目映射为 404 `PLAYER_DATA_UNAVAILABLE`，不能据此判断玩家没有游戏。
 - 玩家时长单位是分钟；Steam 没有“按游玩时长排序”的参数，`most-played` 的排序由本服务完成。
 - 好友码到 SteamID64 的换算是本地纯算术（好友码 = accountID），不调用 Steam，也不占用 Web API 配额。
@@ -688,21 +721,19 @@ GET https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=<KEY>&stea
 
 ---
 
-## 13. 中文资料校验规则
+## 13. 中文资料可用性标记
 
-详情接口在返回前执行以下校验：
+详情接口不再因为缺少中文而返回 422。每次成功返回都会计算：
 
-1. `name` 必须存在（非空字符串）。
-2. `short_description` 必须存在（非空字符串）。
-3. `short_description` 去除 HTML 标签、解码 HTML 实体后，必须包含中文字符（CJK 统一表意文字）。
-4. 任一条不满足，返回 HTTP 422 + `CHINESE_DATA_UNAVAILABLE`。
-5. 游戏名称允许是英文品牌名，不强制包含汉字。
+`chineseDataAvailable` = `name` 存在 且 `short_description` 存在 且 去除 HTML 标签、解码实体后的简介包含中文字符（CJK 统一表意文字）。
 
 说明：
 
+- 缺少名称或简介时，对应标准化字段为 `null`，`raw` 仍保留 Steam 实际返回的全部内容。
+- `language: "schinese"` 只表示请求的本地化语言；Steam 可能回退到英文，必须结合 `chineseDataAvailable` 判断。
+- 不做自动翻译，也不把英文描述标记为中文；`raw` / `description` 保留上游原文。
 - 中文字符检测只用于识别明显缺少中文的资料，不能作为语言质量或官方授权的绝对证明。
-- 不做自动翻译，不把英文描述标记为简体中文，不把缺失的中文描述伪装成成功结果。
-- 搜索接口不做该校验；搜索结果只代表 Steam 搜索命中，详情接口负责最终的中文可用性判断。
+- 搜索接口不做中文检测；需要判断中文可用性时请调用详情接口。
 
 ---
 
@@ -711,7 +742,7 @@ GET https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=<KEY>&stea
 | 数据 | 缓存时间 | 缓存条件 |
 |---|---|---|
 | 游戏搜索结果 | 1 小时 | 仅成功响应 |
-| 游戏详情 | 7 天 | 仅通过中文校验的成功响应 |
+| 游戏详情 | 7 天 | 仅成功响应（含 `raw` 全量字段） |
 | 玩家最近游玩 | 15 分钟 | 仅成功响应 |
 | 玩家时长榜 | 6 小时 | 仅成功响应 |
 | 错误 / 超时结果 | 不缓存 | — |
@@ -779,10 +810,11 @@ Provider 层与业务层解耦，后续可以新增 IGDB、RAWG 等数据源：
 ## 17. 已知限制
 
 - Steam 搜索接口对中文关键词支持有限（见第 12 节）。
+- 列表接口仍按 `limit` 截断；`upstreamTotal` / `ownedGameCount` 表示上游报告的总数。搜索最多返回 10 条，玩家接口最多返回 50 条。
+- 详情接口的 `raw` 包含 Steam 全部字段，响应体积可能较大。
 - 玩家接口需要 `STEAM_API_KEY`，且目标玩家的“游戏详情”必须公开；私有资料无法查询。
 - Steam 的游玩时长统计存在上游延迟，不是实时数据；不同玩家/接口的数据完整度不同。
 - 玩家接口只接受 64 位个人账号 SteamID 或数字好友码，不支持 vanity URL 解析。
 - `workers.dev` 域名上缓存不生效，需自定义域名才能启用 Cache API。
 - 频率限制为单实例内存实现，不是全局配额。
 - Steam 接口非正式公共 API，存在结构变化、限流和不可用风险。
-- 搜索没有分页，最多返回 10 条。

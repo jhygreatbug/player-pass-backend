@@ -1,10 +1,14 @@
 import { API_PREFIX, DEFAULTS } from '../config.js';
 
+// 响应结构或字段发生变化时递增，避免读到旧结构缓存。
+const CACHE_SCHEMA_VERSION = '2';
+
 function buildCacheKey(requestUrl, pathname, params) {
   const url = new URL(requestUrl);
   url.pathname = pathname;
   url.search = '';
   url.hash = '';
+  url.searchParams.set('v', CACHE_SCHEMA_VERSION);
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }

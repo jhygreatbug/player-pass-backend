@@ -1,7 +1,7 @@
 import { DEFAULTS } from '../../config.js';
 import { AppError } from '../../utils/errors.js';
 import { fetchSteamJson } from './client.js';
-import { assertChineseDetails, normalizeAppDetails } from './normalizer.js';
+import { normalizeAppDetails } from './normalizer.js';
 
 export async function getSteamAppDetails(appId) {
   const url = new URL(DEFAULTS.steam.appDetailsUrl);
@@ -24,6 +24,5 @@ export async function getSteamAppDetails(appId) {
   }
 
   const details = normalizeAppDetails(appId, entry.data);
-  assertChineseDetails(details);
   return details;
 }

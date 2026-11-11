@@ -1,4 +1,3 @@
-import { AppError } from '../../utils/errors.js';
 import { htmlToPlainText } from '../../utils/html.js';
 import { hasChineseCharacters } from '../../utils/validation.js';
 
@@ -32,35 +31,31 @@ function normalizeGenres(value) {
     .filter(Boolean);
 }
 
+// 保留 Steam 返回的全部搜索结果和字段，只额外补充 appId/image/source 三个便捷字段。
+// 不过滤 type、不校验 id/名称、不去重，仅在最后按 limit 截断条数。
 export function normalizeSearchResults(items, limit = 10) {
   if (!Array.isArray(items)) return [];
   const max = Number.isSafeInteger(limit) && limit > 0 ? limit : 10;
-
-  const seenAppIds = new Set();
-  const games = [];
-
-  for (const item of items) {
-    if (games.length >= max) break;
-    if (!isPlainObject(item)) continue;
-    if (item.type !== 'app') continue;
-    if (!Number.isSafeInteger(item.id) || item.id <= 0) continue;
-    if (seenAppIds.has(item.id)) continue;
-
-    const name = nonEmptyString(item.name);
-    if (!name) continue;
-
-    seenAppIds.add(item.id);
-    games.push({
-      appId: item.id,
-      name,
-      image: nonEmptyString(item.tiny_image),
-      source: 'steam',
-    });
-  }
-
-  return games;
+  return items
+    .map((item) => {
+      if (!isPlainObject(item)) return item;
+      return {
+        ...item,
+        appId: Number.isSafeInteger(item.id) && item.id > 0 ? item.id : null,
+        image: nonEmptyString(item.tiny_image),
+        source: 'steam',
+      };
+    })
+    .slice(0, max);
 }
 
+function hasChineseDetails(source) {
+  const name = nonEmptyString(source.name);
+  const description = nonEmptyString(source.short_description);
+  return Boolean(name && description && hasChineseCharacters(htmlToPlainText(description)));
+}
+
+// 不做内容过滤：即使缺少中文资料也返回完整数据，并用 chineseDataAvailable 标记。
 export function normalizeAppDetails(appId, data) {
   const source = isPlainObject(data) ? data : {};
 
@@ -82,17 +77,10 @@ export function normalizeAppDetails(appId, data) {
       mac: source.platforms?.mac === true,
       linux: source.platforms?.linux === true,
     },
+    chineseDataAvailable: hasChineseDetails(source),
+    raw: source,
     source: 'steam',
     language: 'schinese',
     sourceUrl: `https://store.steampowered.com/app/${appId}/`,
   };
-}
-
-export function assertChineseDetails(details) {
-  const name = nonEmptyString(details?.name);
-  const description = nonEmptyString(details?.description);
-
-  if (!name || !description || !hasChineseCharacters(htmlToPlainText(description))) {
-    throw new AppError('CHINESE_DATA_UNAVAILABLE', '该游戏没有可用的官方简体中文资料', 422);
-  }
 }

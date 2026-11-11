@@ -3,7 +3,7 @@ import { AppError, invalidParams } from './errors.js';
 
 // 只用于识别明显缺失中文的资料，不能作为语言质量或官方授权的绝对证明。
 // CJK 统一表意文字：扩展 A、基本区、兼容区。
-const CHINESE_PATTERN = /[㐀-䶿一-鿿豈-﫿]/;
+const CHINESE_PATTERN = /[㐀-䶿一-鿿豈-﫿]/;
 
 export function hasChineseCharacters(text) {
   return typeof text === 'string' && CHINESE_PATTERN.test(text);

@@ -37,10 +37,9 @@ class SimpleCache {
   }
 }
 
-test('最近游玩：返回标准化字段并透传 key/steamid/count', async (t) => {
-  const calls = installFetchMock(t, () =>
-    jsonResponse(steamRecentPayload([steamPlayerGame()]))
-  );
+test('最近游玩：保留原始字段并补充便捷字段，按 limit 截断', async (t) => {
+  const rawGame = steamPlayerGame();
+  const calls = installFetchMock(t, () => jsonResponse(steamRecentPayload([rawGame])));
 
   const response = await callWorker(workerRequest(`${RECENT_PATH}?limit=5`));
   assert.equal(response.status, 200);
@@ -52,6 +51,7 @@ test('最近游玩：返回标准化字段并透传 key/steamid/count', async (t
       steamId: STEAM_ID,
       games: [
         {
+          ...rawGame,
           appId: 367520,
           name: 'Hollow Knight',
           playtimeForeverMinutes: 3000,
@@ -62,6 +62,7 @@ test('最近游玩：返回标准化字段并透传 key/steamid/count', async (t
         },
       ],
       total: 1,
+      upstreamTotal: 1,
     },
   });
 
@@ -74,40 +75,50 @@ test('最近游玩：返回标准化字段并透传 key/steamid/count', async (t
   assert.equal(requested.searchParams.get('format'), 'json');
 });
 
-test('游玩时长榜：按累计时长降序、过滤 0 时长并汇总总时长', async (t) => {
-  const calls = installFetchMock(t, () =>
-    jsonResponse(
-      steamOwnedPayload(
-        [
-          steamPlayerGame({ appid: 1, name: 'A', playtime_forever: 100 }),
-          steamPlayerGame({ appid: 2, name: 'B', playtime_forever: 500 }),
-          steamPlayerGame({
-            appid: 3,
-            name: 'C',
-            playtime_forever: 0,
-            rtime_last_played: 0,
-          }),
-          steamPlayerGame({ appid: 4, name: 'D', playtime_forever: 250 }),
-        ],
-        4
-      )
-    )
-  );
+test('游玩时长榜：不过滤 0 时长，按累计时长降序并按 limit 截断', async (t) => {
+  const items = [
+    steamPlayerGame({ appid: 1, name: 'A', playtime_forever: 100 }),
+    steamPlayerGame({ appid: 2, name: 'B', playtime_forever: 500 }),
+    steamPlayerGame({
+      appid: 3,
+      name: 'C',
+      playtime_forever: 0,
+      rtime_last_played: 0,
+    }),
+    steamPlayerGame({ appid: 4, name: 'D', playtime_forever: 250 }),
+  ];
+  const calls = installFetchMock(t, () => jsonResponse(steamOwnedPayload(items, 4)));
 
-  const response = await callWorker(workerRequest(`${MOST_PLAYED_PATH}?limit=2`));
-  assert.equal(response.status, 200);
-  const body = await response.json();
+  const allResponse = await callWorker(workerRequest(`${MOST_PLAYED_PATH}?limit=10`));
+  assert.equal(allResponse.status, 200);
+  const allBody = await allResponse.json();
 
   assert.deepEqual(
-    body.data.games.map((game) => [game.appId, game.playtimeForeverMinutes]),
+    allBody.data.games.map((game) => [game.appId, game.playtimeForeverMinutes]),
+    [
+      [2, 500],
+      [4, 250],
+      [1, 100],
+      [3, 0],
+    ]
+  );
+  assert.equal(allBody.data.total, 4);
+  assert.equal(allBody.data.ownedGameCount, 4);
+  assert.equal(allBody.data.totalPlaytimeMinutes, 850);
+  assert.equal(allBody.data.games[0].appid, 2);
+  assert.equal(allBody.data.games[0].playtime_forever, 500);
+
+  const limitedResponse = await callWorker(workerRequest(`${MOST_PLAYED_PATH}?limit=2`));
+  const limitedBody = await limitedResponse.json();
+  assert.deepEqual(
+    limitedBody.data.games.map((game) => [game.appId, game.playtimeForeverMinutes]),
     [
       [2, 500],
       [4, 250],
     ]
   );
-  assert.equal(body.data.total, 2);
-  assert.equal(body.data.ownedGameCount, 4);
-  assert.equal(body.data.totalPlaytimeMinutes, 850);
+  assert.equal(limitedBody.data.total, 2);
+  assert.equal(calls.length, 2);
 
   const requested = new URL(calls[0].url);
   assert.equal(requested.pathname, '/IPlayerService/GetOwnedGames/v1/');
@@ -127,8 +138,9 @@ test('玩家游戏缺失图片、时间与两周时长时返回 null / 0', async
 
   assert.deepEqual(data.games, [
     {
-      appId: 42,
+      appid: 42,
       name: 'Some Game',
+      appId: 42,
       playtimeForeverMinutes: 0,
       playtimeTwoWeeksMinutes: 0,
       lastPlayedAt: null,
@@ -136,6 +148,7 @@ test('玩家游戏缺失图片、时间与两周时长时返回 null / 0', async
       source: 'steam',
     },
   ]);
+  assert.equal(data.upstreamTotal, 1);
 });
 
 test('无效 SteamID 返回 400 INVALID_STEAM_ID 且不请求 Steam', async (t) => {
@@ -177,6 +190,7 @@ test('好友码会先换算成 17 位 SteamID64 再请求 Steam', async (t) => {
 
   const requested = new URL(calls[0].url);
   assert.equal(requested.searchParams.get('steamid'), STEAM_ID);
+  assert.equal(requested.searchParams.get('count'), '5');
 });
 
 test('玩家接口的非法 limit 返回 400 INVALID_PARAMS', async (t) => {
@@ -226,7 +240,9 @@ test('公开资料但游戏列表为空时正常返回空列表', async (t) => {
 
   const recent = await callWorker(workerRequest(RECENT_PATH));
   assert.equal(recent.status, 200);
-  assert.deepEqual((await recent.json()).data.games, []);
+  const recentBody = await recent.json();
+  assert.deepEqual(recentBody.data.games, []);
+  assert.equal(recentBody.data.upstreamTotal, 0);
 
   const mostPlayed = await callWorker(workerRequest(MOST_PLAYED_PATH));
   assert.equal(mostPlayed.status, 200);

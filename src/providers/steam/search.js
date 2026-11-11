@@ -23,5 +23,8 @@ export async function searchSteamGames(query, limit) {
     throw new AppError('UPSTREAM_ERROR', 'Steam 搜索接口返回的数据结构不符合预期', 502);
   }
 
-  return normalizeSearchResults(payload.items, limit);
+  return {
+    games: normalizeSearchResults(payload.items, limit),
+    upstreamTotal: Number.isSafeInteger(payload.total) ? payload.total : null,
+  };
 }

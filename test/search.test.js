@@ -18,10 +18,9 @@ function searchUrl(query, extra = '') {
   return `${SEARCH_PATH}?q=${encodeURIComponent(query)}${extra}`;
 }
 
-test('中文关键词搜索：透传 term 并返回标准化结果', async (t) => {
-  const calls = installFetchMock(t, () =>
-    jsonResponse(steamSearchPayload([steamSearchItem({ name: '空洞骑士' })]))
-  );
+test('中文关键词搜索：保留上游全部字段并补充便捷字段', async (t) => {
+  const item = steamSearchItem({ name: '空洞骑士' });
+  const calls = installFetchMock(t, () => jsonResponse(steamSearchPayload([item])));
 
   const response = await callWorker(workerRequest(searchUrl('空洞骑士')));
   assert.equal(response.status, 200);
@@ -32,13 +31,14 @@ test('中文关键词搜索：透传 term 并返回标准化结果', async (t) =
     data: {
       games: [
         {
+          ...item,
           appId: 367520,
-          name: '空洞骑士',
           image: 'https://cdn.example.com/367520/capsule_231x87.jpg',
           source: 'steam',
         },
       ],
       total: 1,
+      upstreamTotal: 1,
     },
   });
 
@@ -88,12 +88,16 @@ test('超过 100 字符的关键词返回 400，恰好 100 字符可通过', asy
   assert.equal(boundary.status, 200);
 });
 
-test('Steam 返回空结果是正常响应', async (t) => {
+test('Steam 返回空结果时正常返回空数组', async (t) => {
   installFetchMock(t, () => jsonResponse({ total: 0, items: [] }));
 
   const response = await callWorker(workerRequest(searchUrl('nothing-here')));
   assert.equal(response.status, 200);
-  assert.deepEqual((await response.json()).data, { games: [], total: 0 });
+  assert.deepEqual((await response.json()).data, {
+    games: [],
+    total: 0,
+    upstreamTotal: 0,
+  });
 });
 
 test('Steam 搜索响应缺少 items 时返回 502', async (t) => {
@@ -112,30 +116,39 @@ test('Steam 搜索明确返回 success=false 时返回 502', async (t) => {
   assert.equal((await response.json()).error.code, 'UPSTREAM_ERROR');
 });
 
-test('过滤非 app、无效 AppID 与缺失名称的结果', async (t) => {
-  installFetchMock(t, () =>
-    jsonResponse(
-      steamSearchPayload([
-        steamSearchItem({ id: 10 }),
-        steamSearchItem({ id: 11, type: 'sub' }),
-        steamSearchItem({ id: 0 }),
-        steamSearchItem({ id: '12' }),
-        steamSearchItem({ id: 13, name: '   ' }),
-        steamSearchItem({ id: 14 }),
-      ])
-    )
-  );
+test('不过滤非 app、无效 AppID、空名称，并保留全部原始字段', async (t) => {
+  const items = [
+    steamSearchItem({
+      id: 10,
+      price: { currency: 'CNY', final: 5800 },
+    }),
+    steamSearchItem({ id: 11, type: 'sub' }),
+    steamSearchItem({ id: 0 }),
+    steamSearchItem({ id: '12' }),
+    steamSearchItem({ id: 13, name: '   ' }),
+    steamSearchItem({ id: 14 }),
+  ];
+  installFetchMock(t, () => jsonResponse(steamSearchPayload(items)));
 
   const response = await callWorker(workerRequest(searchUrl('filter')));
   const body = await response.json();
+  const games = body.data.games;
+
+  assert.equal(games.length, 6);
   assert.deepEqual(
-    body.data.games.map((game) => game.appId),
-    [10, 14]
+    games.map((game) => game.appId),
+    [10, 11, null, null, 13, 14]
   );
-  assert.equal(body.data.total, 2);
+  assert.equal(games[0].price.final, 5800);
+  assert.equal(games[1].type, 'sub');
+  assert.equal(games[2].id, 0);
+  assert.equal(games[3].id, '12');
+  assert.equal(games[4].name, '   ');
+  assert.equal(body.data.total, 6);
+  assert.equal(body.data.upstreamTotal, 6);
 });
 
-test('重复 AppID 去重并保留首次出现顺序', async (t) => {
+test('重复搜索结果保留，不再去重', async (t) => {
   installFetchMock(t, () =>
     jsonResponse(
       steamSearchPayload([
@@ -151,11 +164,12 @@ test('重复 AppID 去重并保留首次出现顺序', async (t) => {
   const body = await response.json();
   assert.deepEqual(
     body.data.games.map((game) => game.name),
-    ['A', 'B', 'C']
+    ['A', 'B', 'A duplicated', 'C']
   );
+  assert.equal(body.data.total, 4);
 });
 
-test('limit 生效，默认返回最多 10 条', async (t) => {
+test('limit 仍然生效，默认最多 10 条并保留上游总数', async (t) => {
   const items = Array.from({ length: 12 }, (_, index) =>
     steamSearchItem({ id: index + 1, name: `Game ${index + 1}` })
   );
@@ -165,11 +179,13 @@ test('limit 生效，默认返回最多 10 条', async (t) => {
   const defaultBody = await defaultResponse.json();
   assert.equal(defaultBody.data.games.length, 10);
   assert.equal(defaultBody.data.total, 10);
+  assert.equal(defaultBody.data.upstreamTotal, 12);
 
   const limitedResponse = await callWorker(workerRequest(searchUrl('many', '&limit=2')));
   const limitedBody = await limitedResponse.json();
   assert.equal(limitedBody.data.games.length, 2);
   assert.equal(limitedBody.data.total, 2);
+  assert.equal(limitedBody.data.upstreamTotal, 12);
 });
 
 test('非法 limit 返回 400', async (t) => {

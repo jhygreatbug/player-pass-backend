@@ -21,7 +21,8 @@ function isValidCachedSearch(value) {
   return (
     isPlainObject(value) &&
     Array.isArray(value.games) &&
-    Number.isSafeInteger(value.total)
+    Number.isSafeInteger(value.total) &&
+    Object.prototype.hasOwnProperty.call(value, 'upstreamTotal')
   );
 }
 
@@ -29,8 +30,8 @@ function isValidCachedDetail(value, appId) {
   return (
     isPlainObject(value) &&
     value.appId === appId &&
-    typeof value.name === 'string' &&
-    typeof value.description === 'string' &&
+    isPlainObject(value.raw) &&
+    typeof value.chineseDataAvailable === 'boolean' &&
     typeof value.sourceUrl === 'string'
   );
 }
@@ -52,8 +53,8 @@ export class GameService {
       return { data: cached.value, cacheStatus: 'HIT' };
     }
 
-    const games = await searchSteamGames(query, limit);
-    const data = { games, total: games.length };
+    const { games, upstreamTotal } = await searchSteamGames(query, limit);
+    const data = { games, total: games.length, upstreamTotal };
     await this.cacheService.put(cacheKey, data, DEFAULTS.cache.searchTtlSeconds);
 
     return {
