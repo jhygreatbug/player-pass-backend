@@ -1,13 +1,14 @@
 # Game Data Service
 
-一个独立部署在 **Cloudflare Workers** 上的游戏资料查询服务。通过 Steam 商店接口获取游戏数据，对外提供统一、稳定的 REST + JSON API，供其他应用复用。
+一个独立部署在 **Cloudflare Workers** 上的游戏资料查询服务。通过 Steam 商店与 Steam Web API 获取游戏数据，对外提供统一、稳定的 REST + JSON API，供其他应用复用。
 
-- 不需要 Steam API Key，不需要 Twitch OAuth。
+- 游戏搜索与详情不需要 Steam API Key；玩家游玩数据接口需要 Steam Web API Key。
+- 不需要 Twitch OAuth。
 - 不使用数据库，不使用服务端框架，无第三方运行时依赖。
 - 只使用 Cloudflare Workers 免费套餐即可部署。
 - 中文资料来自 Steam 商店的官方简体中文本地化内容，不做机器翻译。
 
-> 版本：1.0.0（第一阶段）
+> 版本：1.0.0（含玩家游玩数据扩展）
 
 ---
 
@@ -17,8 +18,10 @@
 |---|---|
 | 游戏搜索 | 按关键词搜索 Steam 游戏，返回 AppID、名称、缩略图 |
 | 游戏详情 | 按 AppID 获取名称、简介、详细描述、封面、截图、开发商、发行商、类型、发行日期、平台 |
+| 玩家最近游玩 | 按 SteamID64 获取公开资料玩家最近两周游玩的游戏与时长 |
+| 玩家时长榜 | 按 SteamID64 获取公开资料玩家累计时长最长的游戏、总游玩时长与游戏数量 |
 | 中文校验 | 详情必须存在名称与官方简体中文简介，否则返回 `CHINESE_DATA_UNAVAILABLE` |
-| 缓存 | 搜索结果缓存 1 小时，游戏详情缓存 7 天（依赖部署环境的 Cache API 能力） |
+| 缓存 | 搜索 1 小时、详情 7 天、玩家最近游玩 15 分钟、玩家时长榜 6 小时（依赖部署环境的 Cache API 能力） |
 | 跨域 | 支持浏览器 CORS，可配置允许来源 |
 | 防护 | 参数校验、8 秒上游超时、错误码、按客户端频率限制 |
 
@@ -31,7 +34,7 @@
 | 运行环境 | Cloudflare Workers |
 | 编程语言 | JavaScript（ES Modules） |
 | 部署工具 | Wrangler 4 |
-| 数据来源 | Steam Store API |
+| 数据来源 | Steam Store API / Steam Web API |
 | HTTP 请求 | 原生 `fetch` |
 | 缓存 | Cloudflare Cache API（部署环境支持时） |
 | 数据存储 | 第一阶段无 |
@@ -54,8 +57,9 @@ src/services/          业务编排、缓存读取/写入
   ▼            ▼
 Cache API    src/providers/steam/   Steam 适配、标准化、中文校验
                    │
-                   ▼
-          store.steampowered.com
+        ┌──────────┴──────────┐
+        ▼                     ▼
+store.steampowered.com   api.steampowered.com
 ```
 
 设计要点：
@@ -79,9 +83,10 @@ Cache API    src/providers/steam/   Steam 适配、标准化、中文校验
 │   │       ├── client.js           Steam HTTP 客户端（超时、状态码、JSON 校验）
 │   │       ├── search.js           游戏搜索
 │   │       ├── detail.js           游戏详情
+│   │       ├── player.js           玩家最近游玩 / 累计时长榜
 │   │       └── normalizer.js       数据标准化与中文资料校验
 │   ├── services/
-│   │   ├── game-service.js         业务编排（搜索/详情 + 缓存）
+│   │   ├── game-service.js         业务编排（搜索/详情/玩家数据 + 缓存）
 │   │   └── cache-service.js        Cache API 封装与缓存 Key 构造
 │   ├── middleware/
 │   │   ├── cors.js                 CORS 响应头与 OPTIONS 预检
@@ -97,10 +102,12 @@ Cache API    src/providers/steam/   Steam 适配、标准化、中文校验
 │   ├── detail.test.js              详情接口测试
 │   ├── normalizer.test.js          标准化、中文校验、参数校验测试
 │   ├── cache.test.js               缓存命中/过期/失败降级/隔离测试
+│   ├── player.test.js              玩家最近游玩/时长榜/隐私/Key 测试
 │   └── helpers.js                  测试工具（模拟 fetch、构造响应）
 ├── package.json
 ├── wrangler.toml
 ├── .gitignore
+├── .dev.vars.example               本地 Key 配置模板（真实 Key 写入 .dev.vars）
 └── README.md
 ```
 
@@ -112,8 +119,8 @@ Cache API    src/providers/steam/   Steam 适配、标准化、中文校验
 
 - **Node.js 20 或更高版本**（Wrangler 4 的要求；`package.json` 已声明 `engines.node >= 20`）
 - npm
-- 无需 Steam API Key
 - 无需数据库
+- 游戏搜索/详情不需要 Steam API Key；玩家数据接口需要一个免费的 Steam Web API Key（申请地址：<https://steamcommunity.com/dev/apikey>）
 
 检查版本：
 
@@ -134,6 +141,14 @@ nvm use 20
 ```bash
 npm install
 ```
+
+配置本地 Steam Web API Key：
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+编辑 `.dev.vars`，填入 `STEAM_API_KEY=...`。该文件已被 `.gitignore` 忽略，不要提交真实 Key。不配置 Key 时，搜索与详情接口仍正常工作，玩家数据接口会返回 `STEAM_API_KEY_MISSING`。
 
 ---
 
@@ -178,7 +193,15 @@ curl 'http://localhost:8787/api/v1/games/search?q=Hollow%20Knight'
 curl 'http://localhost:8787/api/v1/games/367520'
 ```
 
-> 搜索关键词请使用 `encodeURIComponent` 编码。Steam 搜索接口对中文关键词的匹配能力有限，建议先用英文或游戏原名搜索；详情接口会返回 Steam 的官方简体中文内容（见第 12 节）。
+```bash
+curl 'http://localhost:8787/api/v1/players/76561197960287930/recent?limit=10'
+```
+
+```bash
+curl 'http://localhost:8787/api/v1/players/76561197960287930/most-played?limit=10'
+```
+
+> 玩家接口中的 SteamID 需要替换为真实的 64 位个人账号 ID，且对方的“游戏详情”隐私设置为公开。搜索关键词请使用 `encodeURIComponent` 编码；Steam 搜索接口对中文关键词的匹配能力有限，建议先用英文或游戏原名搜索；详情接口会返回 Steam 的官方简体中文内容（见第 12 节）。
 
 ---
 
@@ -190,11 +213,12 @@ npm test
 
 测试使用 Node.js 内置测试运行器（`node --test`），不依赖真实 Steam 服务：所有 Steam 响应均由测试代码模拟（`test/helpers.js` 替换全局 `fetch`）。
 
-当前共 54 个测试，覆盖：
+当前共 65 个测试，覆盖：
 
 - 搜索：中文/英文关键词、空关键词、超长关键词、空结果、异常结构、非 app 过滤、无效 AppID 过滤、去重、limit、非 JSON、HTTP 错误、超时（含响应体读取超时）。
 - 详情：正常详情、无效 AppID、游戏不存在、缺少名称、缺少简介、纯英文简介、纯 HTML 简介、图片/可选字段缺失、超时、非 JSON、`success=true` 但缺少 `data`。
-- 标准化与校验：字段映射、HTML 原文保留、capsule 回退、中文检测、AppID/limit/关键词校验、HTML 实体解码。
+- 玩家数据：最近游玩、累计时长排序与汇总、缺失字段、无效 SteamID、limit、未配置 Key、私有资料、空列表、鉴权失败不泄露 Key、超时、缓存隔离。
+- 标准化与校验：字段映射、HTML 原文保留、capsule 回退、中文检测、AppID/limit/关键词校验、HTML 实体解码、SteamID/玩家 limit 校验。
 - 缓存：命中不重复请求、过期后重新请求、写入失败不影响响应、读取失败降级、不同 AppID 不串缓存、错误结果不缓存、Worker 全链路集成、workers.dev 下 `BYPASS`。
 - 接口行为：CORS 预检、来源白名单、405 方法限制、404 路由、429 频率限制。
 
@@ -222,13 +246,21 @@ curl https://player-pass.<你的账号子域>.workers.dev/api/v1/health
 
 ### 环境变量
 
-在 `wrangler.toml` 的 `[vars]` 中配置（修改后重新部署），也可以在 Cloudflare Dashboard 的 Worker 设置中修改：
+普通配置在 `wrangler.toml` 的 `[vars]` 中配置（修改后重新部署），也可以在 Cloudflare Dashboard 的 Worker 设置中修改：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `CORS_ALLOWED_ORIGINS` | `*` | 允许的来源，逗号分隔；`*` 表示允许所有来源 |
 | `RATE_LIMIT_MAX` | `120` | 每个客户端的请求上限（每窗口） |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | 频率限制窗口（秒） |
+
+`STEAM_API_KEY` 是敏感信息，**不要写进 `wrangler.toml`、README 或提交到仓库**。生产环境使用 Wrangler secret：
+
+```bash
+npx wrangler secret put STEAM_API_KEY
+```
+
+本地开发把 Key 写入 `.dev.vars`（已被 gitignore），Wrangler 会自动加载。只有玩家数据接口需要该 Key；不配置时搜索与详情仍然可用。
 
 生产环境建议把 `CORS_ALLOWED_ORIGINS` 改成明确的来源列表，例如：
 
@@ -382,10 +414,99 @@ GET /api/v1/games/367520
 
 - 缺少的可选字段返回 `null` 或空数组，不凭空补充内容。
 - 图片 URL 与 HTML 描述保留 Steam 上游真实内容，不做改写。
-- `detailedDescription`、`about`、`description` 可能包含 HTML；服务端保留原始格式，前端展示前必须自行清理（见第 15 节）。
+- `detailedDescription`、`about`、`description` 可能包含 HTML；服务端保留原始格式，前端展示前必须自行清理（见第 11 节）。
 - 游戏名称允许是英文品牌名（例如 `Hollow Knight`）；中文简介必须存在且包含中文字符。
 
-### 9.4 错误响应
+### 9.4 玩家最近游玩
+
+```http
+GET /api/v1/players/76561197960287930/recent?limit=10
+```
+
+路径参数：
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `steamId` | 是 | 64 位个人账号 SteamID，17 位数字，以 `7656119` 开头 |
+
+查询参数：
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `limit` | 否 | 返回数量，默认 10，范围 1–50 |
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "steamId": "76561197960287930",
+    "games": [
+      {
+        "appId": 367520,
+        "name": "Hollow Knight",
+        "playtimeForeverMinutes": 3000,
+        "playtimeTwoWeeksMinutes": 120,
+        "lastPlayedAt": "2023-11-14T22:13:20.000Z",
+        "icon": "https://media.steampowered.com/steamcommunity/public/images/apps/367520/xxxx.jpg",
+        "source": "steam"
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+说明：
+
+- 数据来自 Steam Web API `IPlayerService/GetRecentlyPlayedGames`，统计窗口固定为最近两周。
+- 时长单位是分钟；`playtimeTwoWeeksMinutes` 为 0 表示最近两周没有记录。
+- `lastPlayedAt` 为 ISO 8601 时间，缺失时为 `null`。
+- 只有玩家“游戏详情”隐私为公开时才返回数据；私有、仅好友或没有数据时返回 404 `PLAYER_DATA_UNAVAILABLE`。无法区分“资料未公开”和“确实没有最近游玩记录”，前端应提示“暂无数据或资料未公开”。
+
+### 9.5 玩家游玩时长榜
+
+```http
+GET /api/v1/players/76561197960287930/most-played?limit=10
+```
+
+路径参数与查询参数同 9.4。
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "steamId": "76561197960287930",
+    "games": [
+      {
+        "appId": 367520,
+        "name": "Hollow Knight",
+        "playtimeForeverMinutes": 3000,
+        "playtimeTwoWeeksMinutes": 0,
+        "lastPlayedAt": "2023-11-14T22:13:20.000Z",
+        "icon": "https://media.steampowered.com/steamcommunity/public/images/apps/367520/xxxx.jpg",
+        "source": "steam"
+      }
+    ],
+    "total": 1,
+    "ownedGameCount": 123,
+    "totalPlaytimeMinutes": 45678
+  }
+}
+```
+
+说明：
+
+- 数据来自 `IPlayerService/GetOwnedGames`，包含已游玩过的免费游戏。
+- 服务端按 `playtime_forever` 降序排序，过滤掉累计时长为 0 的游戏，再取 `limit` 条；Steam 没有“按游玩时长排序”的参数。
+- `ownedGameCount` 是玩家拥有的游戏总数（不受 `limit` 影响）。
+- `totalPlaytimeMinutes` 是所有拥有游戏的累计时长总和（分钟）。
+- 隐私限制与 9.4 相同。
+
+### 9.6 错误响应
 
 ```json
 {
@@ -400,16 +521,19 @@ GET /api/v1/games/367520
 | 错误码 | HTTP 状态 | 说明 |
 |---|---:|---|
 | `INVALID_PARAMS` | 400 | 参数错误（关键词为空/超长、AppID 非正整数、limit 越界） |
+| `INVALID_STEAM_ID` | 400 | SteamID 不是合法的 64 位个人账号 ID |
 | `GAME_NOT_FOUND` | 404 | 游戏不存在或无法获取 |
+| `PLAYER_DATA_UNAVAILABLE` | 404 | 玩家资料不可用、未公开或没有记录 |
 | `CHINESE_DATA_UNAVAILABLE` | 422 | 缺少符合要求的简体中文资料 |
-| `UPSTREAM_ERROR` | 502 | Steam 接口异常（HTTP 错误、非 JSON、结构异常） |
+| `UPSTREAM_ERROR` | 502 | Steam 接口异常（HTTP 错误、非 JSON、结构异常、API Key 被拒绝） |
 | `UPSTREAM_TIMEOUT` | 504 | Steam 请求超时（8 秒） |
 | `RATE_LIMITED` | 429 | 客户端请求频率超限 |
+| `STEAM_API_KEY_MISSING` | 500 | 服务未配置 `STEAM_API_KEY`，无法调用玩家接口 |
 | `INTERNAL_ERROR` | 500 | 服务内部错误 |
 | `METHOD_NOT_ALLOWED` | 405 | 使用了 GET/OPTIONS 以外的方法（响应含 `Allow` 请求头） |
 | `NOT_FOUND` | 404 | 接口路径不存在 |
 
-### 9.5 响应头
+### 9.7 响应头
 
 | 响应头 | 说明 |
 |---|---|
@@ -463,6 +587,19 @@ if (!result.success) {
 
 前端可以区分：搜索成功、没有搜索结果（`success: true` 且 `games: []`）、游戏不存在、缺少官方简体中文资料、上游暂时不可用。
 
+玩家数据（最近游玩 / 时长榜）：
+
+```javascript
+const response = await fetch(
+  `${API_BASE_URL}/api/v1/players/${encodeURIComponent(steamId)}/most-played?limit=10`
+);
+const result = await response.json();
+
+if (!result.success && result.error.code === 'PLAYER_DATA_UNAVAILABLE') {
+  // 玩家资料未公开，或没有游玩记录
+}
+```
+
 ---
 
 ## 11. 安全设计
@@ -471,7 +608,8 @@ if (!result.success) {
 
 - AppID 必须是正整数，拒绝 `0`、负数、小数、非数字、超出安全整数范围的值。
 - 搜索关键词不能为空（去除首尾空格后），最长 100 个字符。
-- `limit` 必须是 1–10 的整数，默认 10。
+- `limit` 必须是 1–10 的整数，默认 10；玩家接口的 `limit` 为 1–50。
+- SteamID 必须是 17 位、以 `7656119` 开头的个人账号 SteamID64，不做 vanity URL 解析。
 - 上游 URL 完全由服务端固定构造，用户参数只作为查询参数值写入，不允许构造任意上游地址。
 
 ### 11.2 上游请求
@@ -479,7 +617,7 @@ if (!result.success) {
 - 使用原生 `fetch`，8 秒超时（`AbortController`）。
 - 检查 HTTP 状态码、JSON 解析、Steam `success` 字段与数据结构。
 - 异常映射为 `UPSTREAM_ERROR` / `UPSTREAM_TIMEOUT`，不向客户端返回上游错误堆栈。
-- 服务端日志只记录方法、路径、错误码和消息，不记录完整上游响应。
+- 服务端日志只记录方法、路径、错误码和消息，不记录完整上游响应，也不记录包含 Key 的上游 URL。
 
 ### 11.3 CORS 与方法限制
 
@@ -509,15 +647,25 @@ element.innerHTML = DOMPurify.sanitize(game.detailedDescription ?? '', {
 
 如果只需要纯文本，可以设置 `element.textContent = ...`，但需要先自行把 HTML 转为纯文本。任何情况下都不要直接使用 `innerHTML = game.detailedDescription`。
 
+### 11.6 Steam API Key 管理
+
+- Key 只保存在服务端：本地写入 `.dev.vars`（已被 gitignore），生产使用 `npx wrangler secret put STEAM_API_KEY`。
+- 不要把 Key 放进前端代码、URL、README、`wrangler.toml` 或 git 提交。
+- 服务端不记录包含 Key 的上游 URL；错误响应也不回显 Key。
+- Key 一旦泄露，应在 Steam 的 API Key 页面重新生成。
+
 ---
 
 ## 12. Steam 数据来源及限制
 
-使用两个商店接口（`l=schinese`、`cc=cn`）：
+游戏搜索/详情使用两个商店接口（`l=schinese`、`cc=cn`）；玩家数据使用 Steam Web API（需要 `STEAM_API_KEY`）：
 
 ```text
 GET https://store.steampowered.com/api/storesearch/?term=<关键词>&l=schinese&cc=cn
 GET https://store.steampowered.com/api/appdetails?appids=<AppID>&l=schinese&cc=cn
+
+GET https://api.steampowered.com/IPlayerService/GetRecentlyPlayedGames/v1/?key=<KEY>&steamid=<SteamID64>&count=<数量>
+GET https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=<KEY>&steamid=<SteamID64>&include_appinfo=1&include_played_free_games=1
 ```
 
 限制与注意事项：
@@ -530,6 +678,11 @@ GET https://store.steampowered.com/api/appdetails?appids=<AppID>&l=schinese&cc=c
   - `appdetails` 对不存在的 AppID 返回 HTTP 200 + `{"<appid>":{"success":false}}`，本项目转换为 404 `GAME_NOT_FOUND`。
   - 不同游戏的字段完整度差异很大：有的没有截图、发行日期、开发商等；缺失字段按约定返回 `null` 或 `[]`。
 - 中文内容固定请求 `schinese` 本地化。详情接口只有在名称存在且简介包含中文字符时才返回成功，不会用英文资料冒充中文。
+- 玩家接口只在目标玩家“游戏详情”隐私为公开时返回数据；私有、仅好友或没有记录返回空 `response`，本项目映射为 404 `PLAYER_DATA_UNAVAILABLE`，不能据此判断玩家没有游戏。
+- 玩家时长单位是分钟；Steam 没有“按游玩时长排序”的参数，`most-played` 的排序由本服务完成。
+- 普通 Web API Key 的每日调用配额官方没有明确承诺（社区经验约 10 万次/24 小时）；本项目已缓存并做自身限流，但仍需关注上游 429/限流。
+- 实测（2026-11-11）：使用公开的 Steam Deck 官方账号验证 `GetOwnedGames`，返回 12 款游戏、累计 817 分钟，Top 为 TEKKEN 7（219 分钟）；同一账号的 `GetRecentlyPlayedGames` 返回空（无最近记录或未公开），说明不同玩家和不同接口的数据完整度不同。
+- `GetSingleGamePlaytime` 需要与 AppID 绑定的 publisher key，本项目不使用该接口。
 
 ---
 
@@ -557,6 +710,8 @@ GET https://store.steampowered.com/api/appdetails?appids=<AppID>&l=schinese&cc=c
 |---|---|---|
 | 游戏搜索结果 | 1 小时 | 仅成功响应 |
 | 游戏详情 | 7 天 | 仅通过中文校验的成功响应 |
+| 玩家最近游玩 | 15 分钟 | 仅成功响应 |
+| 玩家时长榜 | 6 小时 | 仅成功响应 |
 | 错误 / 超时结果 | 不缓存 | — |
 
 实现方式与保证：
@@ -565,7 +720,9 @@ GET https://store.steampowered.com/api/appdetails?appids=<AppID>&l=schinese&cc=c
 - 缓存 Key 由“当前请求的 origin + 规范化路径 + 完整查询条件”组成：
   - 搜索：`/api/v1/games/search?q=<关键词>&limit=<数量>&l=schinese&cc=cn`
   - 详情：`/api/v1/games/<AppID>?l=schinese&cc=cn`
-  - 不同 AppID、不同关键词、不同 limit 使用不同的 Key，不会串数据。
+  - 玩家最近游玩：`/api/v1/players/<SteamID>/recent?limit=<数量>`
+  - 玩家时长榜：`/api/v1/players/<SteamID>/most-played?limit=<数量>`
+  - 不同 AppID、不同 SteamID、不同关键词、不同 limit 使用不同的 Key，不会串数据。
 - 缓存读取失败时降级为直接请求 Steam；缓存写入失败不影响本次响应。
 - 响应头 `X-Cache` 为 `HIT` / `MISS` / `BYPASS`。
 - 缓存 TTL 通过响应头 `Cache-Control: max-age/s-maxage` 声明；实际保留时间受 Cloudflare 缓存淘汰策略影响，TTL 是上限而不是保证。
@@ -595,20 +752,20 @@ GET https://store.steampowered.com/api/appdetails?appids=<AppID>&l=schinese&cc=c
 
 Provider 层与业务层解耦，后续可以新增 IGDB、RAWG 等数据源：
 
-1. 新建 `src/providers/<source>/`，提供 `client.js`、`search.js`、`detail.js`、`normalizer.js`。
+1. 新建 `src/providers/<source>/`，提供 `client.js`、`search.js`、`detail.js`、`normalizer.js`；如果需要玩家数据，再增加 `player.js`。
 2. 标准化函数输出与 Steam Provider 相同的数据结构（`appId` 可改为 `sourceId` 等，但需要保持 API 契约一致）。
 3. 在 `GameService` 中按配置选择 Provider，或在路由层增加数据源选择参数。
 4. 在响应的 `source` 字段中返回新的数据源标识。
 
-第一阶段只实现 Steam，不引入多数据源切换、数据库持久化或定时同步。
+当前只实现 Steam 数据源，不引入多数据源切换、数据库持久化或定时同步。
 
 ---
 
-## 16. 第一阶段范围外
+## 16. 暂不实现的功能
 
-以下功能明确不在本阶段实现：
+以下功能暂不在本服务范围内：
 
-- 用户登录、权限管理、收藏、游戏库、游戏时长、账号绑定。
+- 用户登录、权限管理、收藏、游戏库、账号绑定（玩家数据接口只按传入的公开 SteamID 查询，不做账号绑定）。
 - 评论、社区、推荐、排行榜。
 - 后台管理、资料手动编辑、自动翻译、多语言切换。
 - IGDB、RAWG 等其他数据源。
@@ -620,6 +777,9 @@ Provider 层与业务层解耦，后续可以新增 IGDB、RAWG 等数据源：
 ## 17. 已知限制
 
 - Steam 搜索接口对中文关键词支持有限（见第 12 节）。
+- 玩家接口需要 `STEAM_API_KEY`，且目标玩家的“游戏详情”必须公开；私有资料无法查询。
+- Steam 的游玩时长统计存在上游延迟，不是实时数据；不同玩家/接口的数据完整度不同。
+- 玩家接口只接受 64 位个人账号 SteamID，不支持 vanity URL 解析。
 - `workers.dev` 域名上缓存不生效，需自定义域名才能启用 Cache API。
 - 频率限制为单实例内存实现，不是全局配额。
 - Steam 接口非正式公共 API，存在结构变化、限流和不可用风险。

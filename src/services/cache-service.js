@@ -37,6 +37,18 @@ export function buildDetailCacheKey(requestUrl, appId) {
   });
 }
 
+export function buildPlayerRecentCacheKey(requestUrl, steamId, limit) {
+  return buildCacheKey(requestUrl, `${API_PREFIX}/players/${steamId}/recent`, {
+    limit: String(limit),
+  });
+}
+
+export function buildPlayerMostPlayedCacheKey(requestUrl, steamId, limit) {
+  return buildCacheKey(requestUrl, `${API_PREFIX}/players/${steamId}/most-played`, {
+    limit: String(limit),
+  });
+}
+
 export class CacheService {
   constructor({ cache } = {}) {
     this.injectedCache = cache;

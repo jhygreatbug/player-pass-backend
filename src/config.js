@@ -10,14 +10,23 @@ export const DEFAULTS = {
     countryCode: 'cn',
     timeoutMs: 8000,
   },
+  steamWebApi: {
+    baseUrl: 'https://api.steampowered.com',
+  },
   cache: {
     searchTtlSeconds: 60 * 60,
     detailTtlSeconds: 60 * 60 * 24 * 7,
+    playerRecentTtlSeconds: 15 * 60,
+    playerMostPlayedTtlSeconds: 6 * 60 * 60,
   },
   search: {
     defaultLimit: 10,
     maxLimit: 10,
     maxQueryLength: 100,
+  },
+  player: {
+    defaultLimit: 10,
+    maxLimit: 50,
   },
   rateLimit: {
     maxRequests: 120,
@@ -55,5 +64,6 @@ export function getRuntimeConfig(env = {}) {
         3600
       ),
     },
+    steamApiKey: typeof env.STEAM_API_KEY === 'string' ? env.STEAM_API_KEY.trim() : '',
   };
 }

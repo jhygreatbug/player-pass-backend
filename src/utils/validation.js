@@ -1,5 +1,5 @@
 import { DEFAULTS } from '../config.js';
-import { invalidParams } from './errors.js';
+import { AppError, invalidParams } from './errors.js';
 
 // 只用于识别明显缺失中文的资料，不能作为语言质量或官方授权的绝对证明。
 // CJK 统一表意文字：扩展 A、基本区、兼容区。
@@ -44,4 +44,27 @@ export function parseAppId(raw) {
     throw invalidParams('AppID 必须是正整数');
   }
   return appId;
+}
+
+export function parseSteamId(raw) {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  // 个人账号的 SteamID64 固定以 7656119 开头，共 17 位。
+  if (!/^7656119\d{10}$/.test(value)) {
+    throw new AppError('INVALID_STEAM_ID', 'SteamID 必须是 64 位个人账号 ID', 400);
+  }
+  return value;
+}
+
+export function parsePlayerLimit(raw) {
+  if (raw === null || raw === undefined || raw === '') {
+    return DEFAULTS.player.defaultLimit;
+  }
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+    throw invalidParams(`limit 必须是 1 到 ${DEFAULTS.player.maxLimit} 之间的整数`);
+  }
+  const limit = Number.parseInt(raw, 10);
+  if (limit < 1 || limit > DEFAULTS.player.maxLimit) {
+    throw invalidParams(`limit 必须是 1 到 ${DEFAULTS.player.maxLimit} 之间的整数`);
+  }
+  return limit;
 }

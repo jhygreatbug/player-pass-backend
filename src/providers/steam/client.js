@@ -32,11 +32,13 @@ export async function fetchSteamJson(urlString) {
     }
 
     if (!response.ok) {
-      throw new AppError(
+      const error = new AppError(
         'UPSTREAM_ERROR',
         `Steam 接口返回 HTTP 状态码 ${response.status}`,
         502
       );
+      error.upstreamStatus = response.status;
+      throw error;
     }
 
     try {

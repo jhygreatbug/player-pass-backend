@@ -4,6 +4,7 @@ export const TEST_ENV = {
   CORS_ALLOWED_ORIGINS: '*',
   RATE_LIMIT_MAX: '100000',
   RATE_LIMIT_WINDOW_SECONDS: '60',
+  STEAM_API_KEY: 'test-key',
 };
 
 export function installFetchMock(t, responder) {
@@ -83,4 +84,24 @@ export function steamDetailData(overrides = {}) {
 
 export function steamDetailPayload(appId, data) {
   return { [String(appId)]: { success: true, data } };
+}
+
+export function steamPlayerGame(overrides = {}) {
+  return {
+    appid: 367520,
+    name: 'Hollow Knight',
+    playtime_2weeks: 120,
+    playtime_forever: 3000,
+    img_icon_url: 'iconhash',
+    rtime_last_played: 1700000000,
+    ...overrides,
+  };
+}
+
+export function steamRecentPayload(games) {
+  return { response: { total_count: games.length, games } };
+}
+
+export function steamOwnedPayload(games, gameCount = games.length) {
+  return { response: { game_count: gameCount, games } };
 }

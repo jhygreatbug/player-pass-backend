@@ -1,11 +1,21 @@
 import { API_PREFIX, SERVICE_NAME, SERVICE_VERSION } from './config.js';
 import { GameService } from './services/game-service.js';
 import { errorResponse, jsonResponse, successResponse } from './utils/response.js';
-import { parseAppId, parseLimit, parseSearchQuery } from './utils/validation.js';
+import {
+  parseAppId,
+  parseLimit,
+  parsePlayerLimit,
+  parseSearchQuery,
+  parseSteamId,
+} from './utils/validation.js';
 
 const HEALTH_PATH = `${API_PREFIX}/health`;
 const SEARCH_PATH = `${API_PREFIX}/games/search`;
 const DETAIL_PATH_PATTERN = new RegExp(`^${API_PREFIX}/games/([^/]+)$`);
+const PLAYER_RECENT_PATTERN = new RegExp(`^${API_PREFIX}/players/([^/]+)/recent$`);
+const PLAYER_MOST_PLAYED_PATTERN = new RegExp(
+  `^${API_PREFIX}/players/([^/]+)/most-played$`
+);
 
 export async function routeRequest(request, { gameService = new GameService() } = {}) {
   const url = new URL(request.url);
@@ -35,6 +45,30 @@ export async function routeRequest(request, { gameService = new GameService() } 
     const appId = parseAppId(detailMatch[1]);
     const { data, cacheStatus } = await gameService.getGameDetails({
       appId,
+      requestUrl: request.url,
+    });
+    return successResponse(data, { headers: { 'X-Cache': cacheStatus } });
+  }
+
+  const recentMatch = pathname.match(PLAYER_RECENT_PATTERN);
+  if (recentMatch) {
+    const steamId = parseSteamId(recentMatch[1]);
+    const limit = parsePlayerLimit(url.searchParams.get('limit'));
+    const { data, cacheStatus } = await gameService.getRecentlyPlayedGames({
+      steamId,
+      limit,
+      requestUrl: request.url,
+    });
+    return successResponse(data, { headers: { 'X-Cache': cacheStatus } });
+  }
+
+  const mostPlayedMatch = pathname.match(PLAYER_MOST_PLAYED_PATTERN);
+  if (mostPlayedMatch) {
+    const steamId = parseSteamId(mostPlayedMatch[1]);
+    const limit = parsePlayerLimit(url.searchParams.get('limit'));
+    const { data, cacheStatus } = await gameService.getMostPlayedGames({
+      steamId,
+      limit,
       requestUrl: request.url,
     });
     return successResponse(data, { headers: { 'X-Cache': cacheStatus } });

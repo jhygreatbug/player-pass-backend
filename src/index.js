@@ -3,10 +3,14 @@ import { applyCorsHeaders, preflightResponse } from './middleware/cors.js';
 import { handleError } from './middleware/error-handler.js';
 import { getClientKey, RateLimiter } from './middleware/rate-limit.js';
 import { routeRequest } from './router.js';
+import { GameService } from './services/game-service.js';
 import { errorResponse } from './utils/response.js';
 
 const searchPath = `${API_PREFIX}/games/search`;
 const detailPathPattern = new RegExp(`^${API_PREFIX}/games/[^/]+$`);
+const playerPathPattern = new RegExp(
+  `^${API_PREFIX}/players/[^/]+/(recent|most-played)$`
+);
 
 const rateLimiter = new RateLimiter();
 
@@ -16,12 +20,15 @@ function normalizePath(pathname) {
 
 function isRateLimitedPath(pathname) {
   const path = normalizePath(pathname);
-  return path === searchPath || detailPathPattern.test(path);
+  return (
+    path === searchPath || detailPathPattern.test(path) || playerPathPattern.test(path)
+  );
 }
 
 export default {
   async fetch(request, env = {}) {
     const runtimeConfig = getRuntimeConfig(env);
+    const gameService = new GameService({ steamApiKey: runtimeConfig.steamApiKey });
     const url = new URL(request.url);
     const allowedOrigins = runtimeConfig.cors.allowedOrigins;
 
@@ -45,7 +52,7 @@ export default {
       }
 
       if (!response) {
-        response = await routeRequest(request);
+        response = await routeRequest(request, { gameService });
       }
     } catch (error) {
       response = handleError(error, { method: request.method, path: url.pathname });

@@ -1,9 +1,15 @@
 import { DEFAULTS } from '../config.js';
 import { getSteamAppDetails } from '../providers/steam/detail.js';
+import {
+  getSteamMostPlayedGames,
+  getSteamRecentlyPlayedGames,
+} from '../providers/steam/player.js';
 import { searchSteamGames } from '../providers/steam/search.js';
 import {
   CacheService,
   buildDetailCacheKey,
+  buildPlayerMostPlayedCacheKey,
+  buildPlayerRecentCacheKey,
   buildSearchCacheKey,
 } from './cache-service.js';
 
@@ -29,9 +35,14 @@ function isValidCachedDetail(value, appId) {
   );
 }
 
+function isValidCachedPlayerList(value, steamId) {
+  return isPlainObject(value) && value.steamId === steamId && Array.isArray(value.games);
+}
+
 export class GameService {
-  constructor({ cacheService } = {}) {
+  constructor({ cacheService, steamApiKey = '' } = {}) {
     this.cacheService = cacheService ?? new CacheService();
+    this.steamApiKey = steamApiKey;
   }
 
   async searchGames({ query, limit, requestUrl }) {
@@ -63,6 +74,38 @@ export class GameService {
 
     return {
       data: details,
+      cacheStatus: cached.status === 'bypass' ? 'BYPASS' : 'MISS',
+    };
+  }
+
+  async getRecentlyPlayedGames({ steamId, limit, requestUrl }) {
+    const cacheKey = buildPlayerRecentCacheKey(requestUrl, steamId, limit);
+    const cached = await this.cacheService.match(cacheKey);
+    if (cached.status === 'hit' && isValidCachedPlayerList(cached.value, steamId)) {
+      return { data: cached.value, cacheStatus: 'HIT' };
+    }
+
+    const data = await getSteamRecentlyPlayedGames(steamId, limit, this.steamApiKey);
+    await this.cacheService.put(cacheKey, data, DEFAULTS.cache.playerRecentTtlSeconds);
+
+    return {
+      data,
+      cacheStatus: cached.status === 'bypass' ? 'BYPASS' : 'MISS',
+    };
+  }
+
+  async getMostPlayedGames({ steamId, limit, requestUrl }) {
+    const cacheKey = buildPlayerMostPlayedCacheKey(requestUrl, steamId, limit);
+    const cached = await this.cacheService.match(cacheKey);
+    if (cached.status === 'hit' && isValidCachedPlayerList(cached.value, steamId)) {
+      return { data: cached.value, cacheStatus: 'HIT' };
+    }
+
+    const data = await getSteamMostPlayedGames(steamId, limit, this.steamApiKey);
+    await this.cacheService.put(cacheKey, data, DEFAULTS.cache.playerMostPlayedTtlSeconds);
+
+    return {
+      data,
       cacheStatus: cached.status === 'bypass' ? 'BYPASS' : 'MISS',
     };
   }
