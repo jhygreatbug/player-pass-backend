@@ -1,0 +1,19 @@
+{
+  "name": "game-data-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "独立的游戏资料查询 API 服务，部署于 Cloudflare Workers，数据来自 Steam 商店。",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "node --test",
+    "deploy": "wrangler deploy"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
