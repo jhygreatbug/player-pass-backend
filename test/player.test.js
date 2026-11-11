@@ -145,7 +145,10 @@ test('无效 SteamID 返回 400 INVALID_STEAM_ID 且不请求 Steam', async (t) 
 
   for (const steamId of [
     'abc',
-    '123',
+    '0',
+    '00022202',
+    '12345678901',
+    '4294967296',
     '7656119796028793',
     '765611979602879301',
     '86561197960287930',
@@ -157,6 +160,23 @@ test('无效 SteamID 返回 400 INVALID_STEAM_ID 且不请求 Steam', async (t) 
     assert.equal((await response.json()).error.code, 'INVALID_STEAM_ID');
   }
   assert.equal(calls.length, 0);
+});
+
+test('好友码会先换算成 17 位 SteamID64 再请求 Steam', async (t) => {
+  const calls = installFetchMock(t, () =>
+    jsonResponse(steamRecentPayload([steamPlayerGame()]))
+  );
+
+  // 76561197960287930 的 accountID 是 22202，好友码即 22202。
+  const response = await callWorker(
+    workerRequest('/api/v1/players/22202/recent?limit=5')
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.data.steamId, STEAM_ID);
+
+  const requested = new URL(calls[0].url);
+  assert.equal(requested.searchParams.get('steamid'), STEAM_ID);
 });
 
 test('玩家接口的非法 limit 返回 400 INVALID_PARAMS', async (t) => {

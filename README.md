@@ -18,8 +18,8 @@
 |---|---|
 | 游戏搜索 | 按关键词搜索 Steam 游戏，返回 AppID、名称、缩略图 |
 | 游戏详情 | 按 AppID 获取名称、简介、详细描述、封面、截图、开发商、发行商、类型、发行日期、平台 |
-| 玩家最近游玩 | 按 SteamID64 获取公开资料玩家最近两周游玩的游戏与时长 |
-| 玩家时长榜 | 按 SteamID64 获取公开资料玩家累计时长最长的游戏、总游玩时长与游戏数量 |
+| 玩家最近游玩 | 按 SteamID64 或数字好友码获取公开资料玩家最近两周游玩的游戏与时长 |
+| 玩家时长榜 | 按 SteamID64 或数字好友码获取公开资料玩家累计时长最长的游戏、总游玩时长与游戏数量 |
 | 中文校验 | 详情必须存在名称与官方简体中文简介，否则返回 `CHINESE_DATA_UNAVAILABLE` |
 | 缓存 | 搜索 1 小时、详情 7 天、玩家最近游玩 15 分钟、玩家时长榜 6 小时（依赖部署环境的 Cache API 能力） |
 | 跨域 | 支持浏览器 CORS，可配置允许来源 |
@@ -201,7 +201,7 @@ curl 'http://localhost:8787/api/v1/players/76561197960287930/recent?limit=10'
 curl 'http://localhost:8787/api/v1/players/76561197960287930/most-played?limit=10'
 ```
 
-> 玩家接口中的 SteamID 需要替换为真实的 64 位个人账号 ID，且对方的“游戏详情”隐私设置为公开。搜索关键词请使用 `encodeURIComponent` 编码；Steam 搜索接口对中文关键词的匹配能力有限，建议先用英文或游戏原名搜索；详情接口会返回 Steam 的官方简体中文内容（见第 12 节）。
+> 玩家接口中的 SteamID 需要替换为真实的 64 位个人账号 ID；也可以直接使用 Steam 客户端的数字好友码（即账号的 accountID，服务端在本地换算）。无论哪种写法，对方的“游戏详情”隐私都必须设置为公开。搜索关键词请使用 `encodeURIComponent` 编码；Steam 搜索接口对中文关键词的匹配能力有限，建议先用英文或游戏原名搜索；详情接口会返回 Steam 的官方简体中文内容（见第 12 节）。
 
 ---
 
@@ -213,12 +213,12 @@ npm test
 
 测试使用 Node.js 内置测试运行器（`node --test`），不依赖真实 Steam 服务：所有 Steam 响应均由测试代码模拟（`test/helpers.js` 替换全局 `fetch`）。
 
-当前共 65 个测试，覆盖：
+当前共 68 个测试，覆盖：
 
 - 搜索：中文/英文关键词、空关键词、超长关键词、空结果、异常结构、非 app 过滤、无效 AppID 过滤、去重、limit、非 JSON、HTTP 错误、超时（含响应体读取超时）。
 - 详情：正常详情、无效 AppID、游戏不存在、缺少名称、缺少简介、纯英文简介、纯 HTML 简介、图片/可选字段缺失、超时、非 JSON、`success=true` 但缺少 `data`。
-- 玩家数据：最近游玩、累计时长排序与汇总、缺失字段、无效 SteamID、limit、未配置 Key、私有资料、空列表、鉴权失败不泄露 Key、超时、缓存隔离。
-- 标准化与校验：字段映射、HTML 原文保留、capsule 回退、中文检测、AppID/limit/关键词校验、HTML 实体解码、SteamID/玩家 limit 校验。
+- 玩家数据：最近游玩、累计时长排序与汇总、缺失字段、无效 SteamID、好友码换算、limit、未配置 Key、私有资料、空列表、鉴权失败不泄露 Key、超时、缓存隔离。
+- 标准化与校验：字段映射、HTML 原文保留、capsule 回退、中文检测、AppID/limit/关键词校验、HTML 实体解码、SteamID/好友码/玩家 limit 校验。
 - 缓存：命中不重复请求、过期后重新请求、写入失败不影响响应、读取失败降级、不同 AppID 不串缓存、错误结果不缓存、Worker 全链路集成、workers.dev 下 `BYPASS`。
 - 接口行为：CORS 预检、来源白名单、405 方法限制、404 路由、429 频率限制。
 
@@ -427,7 +427,7 @@ GET /api/v1/players/76561197960287930/recent?limit=10
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
-| `steamId` | 是 | 64 位个人账号 SteamID，17 位数字，以 `7656119` 开头 |
+| `steamId` | 是 | 17 位个人账号 SteamID64，或 1–10 位数字好友码（即账号的 accountID） |
 
 查询参数：
 
@@ -461,6 +461,7 @@ GET /api/v1/players/76561197960287930/recent?limit=10
 说明：
 
 - 数据来自 Steam Web API `IPlayerService/GetRecentlyPlayedGames`，统计窗口固定为最近两周。
+- 路径参数也接受 Steam 客户端的数字好友码（1–10 位，即 accountID）；服务端在本地用 BigInt 换算为 SteamID64 后再请求 Steam，不额外调用接口，响应中的 `steamId` 始终是换算后的 64 位 ID。
 - 时长单位是分钟；`playtimeTwoWeeksMinutes` 为 0 表示最近两周没有记录。
 - `lastPlayedAt` 为 ISO 8601 时间，缺失时为 `null`。
 - 只有玩家“游戏详情”隐私为公开时才返回数据；私有、仅好友或没有数据时返回 404 `PLAYER_DATA_UNAVAILABLE`。无法区分“资料未公开”和“确实没有最近游玩记录”，前端应提示“暂无数据或资料未公开”。
@@ -521,7 +522,7 @@ GET /api/v1/players/76561197960287930/most-played?limit=10
 | 错误码 | HTTP 状态 | 说明 |
 |---|---:|---|
 | `INVALID_PARAMS` | 400 | 参数错误（关键词为空/超长、AppID 非正整数、limit 越界） |
-| `INVALID_STEAM_ID` | 400 | SteamID 不是合法的 64 位个人账号 ID |
+| `INVALID_STEAM_ID` | 400 | SteamID 不是合法的 64 位个人账号 ID 或数字好友码 |
 | `GAME_NOT_FOUND` | 404 | 游戏不存在或无法获取 |
 | `PLAYER_DATA_UNAVAILABLE` | 404 | 玩家资料不可用、未公开或没有记录 |
 | `CHINESE_DATA_UNAVAILABLE` | 422 | 缺少符合要求的简体中文资料 |
@@ -609,7 +610,7 @@ if (!result.success && result.error.code === 'PLAYER_DATA_UNAVAILABLE') {
 - AppID 必须是正整数，拒绝 `0`、负数、小数、非数字、超出安全整数范围的值。
 - 搜索关键词不能为空（去除首尾空格后），最长 100 个字符。
 - `limit` 必须是 1–10 的整数，默认 10；玩家接口的 `limit` 为 1–50。
-- SteamID 必须是 17 位、以 `7656119` 开头的个人账号 SteamID64，不做 vanity URL 解析。
+- 玩家标识必须是 17 位个人账号 SteamID64（数值范围对应 `76561197960265728 + accountID`），或 1–10 位数字好友码。好友码就是 accountID，服务端用 BigInt 在本地换算成 SteamID64，不额外请求 Steam；不做 vanity URL 解析。
 - 上游 URL 完全由服务端固定构造，用户参数只作为查询参数值写入，不允许构造任意上游地址。
 
 ### 11.2 上游请求
@@ -680,6 +681,7 @@ GET https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=<KEY>&stea
 - 中文内容固定请求 `schinese` 本地化。详情接口只有在名称存在且简介包含中文字符时才返回成功，不会用英文资料冒充中文。
 - 玩家接口只在目标玩家“游戏详情”隐私为公开时返回数据；私有、仅好友或没有记录返回空 `response`，本项目映射为 404 `PLAYER_DATA_UNAVAILABLE`，不能据此判断玩家没有游戏。
 - 玩家时长单位是分钟；Steam 没有“按游玩时长排序”的参数，`most-played` 的排序由本服务完成。
+- 好友码到 SteamID64 的换算是本地纯算术（好友码 = accountID），不调用 Steam，也不占用 Web API 配额。
 - 普通 Web API Key 的每日调用配额官方没有明确承诺（社区经验约 10 万次/24 小时）；本项目已缓存并做自身限流，但仍需关注上游 429/限流。
 - 实测（2026-11-11）：使用公开的 Steam Deck 官方账号验证 `GetOwnedGames`，返回 12 款游戏、累计 817 分钟，Top 为 TEKKEN 7（219 分钟）；同一账号的 `GetRecentlyPlayedGames` 返回空（无最近记录或未公开），说明不同玩家和不同接口的数据完整度不同。
 - `GetSingleGamePlaytime` 需要与 AppID 绑定的 publisher key，本项目不使用该接口。
@@ -779,7 +781,7 @@ Provider 层与业务层解耦，后续可以新增 IGDB、RAWG 等数据源：
 - Steam 搜索接口对中文关键词支持有限（见第 12 节）。
 - 玩家接口需要 `STEAM_API_KEY`，且目标玩家的“游戏详情”必须公开；私有资料无法查询。
 - Steam 的游玩时长统计存在上游延迟，不是实时数据；不同玩家/接口的数据完整度不同。
-- 玩家接口只接受 64 位个人账号 SteamID，不支持 vanity URL 解析。
+- 玩家接口只接受 64 位个人账号 SteamID 或数字好友码，不支持 vanity URL 解析。
 - `workers.dev` 域名上缓存不生效，需自定义域名才能启用 Cache API。
 - 频率限制为单实例内存实现，不是全局配额。
 - Steam 接口非正式公共 API，存在结构变化、限流和不可用风险。

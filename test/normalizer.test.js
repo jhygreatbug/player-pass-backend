@@ -13,6 +13,7 @@ import {
   parseAppId,
   parseLimit,
   parseSearchQuery,
+  parseSteamId,
 } from '../src/utils/validation.js';
 
 test('normalizeSearchResults 过滤无效项、去重并保持顺序', () => {
@@ -164,6 +165,40 @@ test('parseAppId 只接受正整数', () => {
   assert.equal(parseAppId('367520'), 367520);
   for (const value of ['0', '-1', '1.5', 'abc', '', '99999999999999999999']) {
     assert.throws(() => parseAppId(value), (error) => error.code === 'INVALID_PARAMS');
+  }
+});
+
+test('parseSteamId 接受 17 位 SteamID64 与数字好友码', () => {
+  assert.equal(parseSteamId('76561197960287930'), '76561197960287930');
+  assert.equal(parseSteamId(' 76561197960287930 '), '76561197960287930');
+  // 好友码就是 accountID，本地换算为 SteamID64。
+  assert.equal(parseSteamId('22202'), '76561197960287930');
+  assert.equal(parseSteamId(' 22202 '), '76561197960287930');
+  assert.equal(parseSteamId('1'), '76561197960265729');
+  assert.equal(parseSteamId('4294967295'), '76561202255233023');
+  // accountID 接近 32 位上限时前缀会进位到 7656120，直接传该 ID 也应有效。
+  assert.equal(parseSteamId('76561202255233023'), '76561202255233023');
+});
+
+test('parseSteamId 拒绝非法 ID 与超出范围的好友码', () => {
+  for (const value of [
+    '',
+    '   ',
+    'abc',
+    '0',
+    '00022202',
+    '12345678901',
+    '4294967296',
+    '76561197960265728',
+    '76561202255233024',
+    '7656119796028793',
+    '765611979602879301',
+    '86561197960287930',
+  ]) {
+    assert.throws(
+      () => parseSteamId(value),
+      (error) => error.code === 'INVALID_STEAM_ID' && error.status === 400
+    );
   }
 });
 

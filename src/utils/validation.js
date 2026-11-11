@@ -46,13 +46,35 @@ export function parseAppId(raw) {
   return appId;
 }
 
+// 个人账号 SteamID64 = 76561197960265728 + accountID，accountID 占 32 位。
+// 已知账号的 ID 以 7656119 开头，但 accountID 接近上限时前缀会进位到 7656120。
+const STEAM_ID64_BASE = 76561197960265728n;
+const MAX_ACCOUNT_ID = 0xffffffffn;
+const STEAM_ID64_PATTERN = /^\d{17}$/;
+// 好友码就是账号的 accountID（SteamID3 里的 N），1–10 位数字，无前导零。
+const FRIEND_CODE_PATTERN = /^[1-9]\d{0,9}$/;
+
 export function parseSteamId(raw) {
   const value = typeof raw === 'string' ? raw.trim() : '';
-  // 个人账号的 SteamID64 固定以 7656119 开头，共 17 位。
-  if (!/^7656119\d{10}$/.test(value)) {
-    throw new AppError('INVALID_STEAM_ID', 'SteamID 必须是 64 位个人账号 ID', 400);
+
+  if (STEAM_ID64_PATTERN.test(value)) {
+    const steamId = BigInt(value);
+    if (steamId > STEAM_ID64_BASE && steamId <= STEAM_ID64_BASE + MAX_ACCOUNT_ID) {
+      return value;
+    }
+  } else if (FRIEND_CODE_PATTERN.test(value)) {
+    // 好友码在本地换算即可得到 SteamID64，不需要调用 Steam。
+    const accountId = BigInt(value);
+    if (accountId <= MAX_ACCOUNT_ID) {
+      return (STEAM_ID64_BASE + accountId).toString();
+    }
   }
-  return value;
+
+  throw new AppError(
+    'INVALID_STEAM_ID',
+    'SteamID 必须是 64 位个人账号 ID 或数字好友码',
+    400
+  );
 }
 
 export function parsePlayerLimit(raw) {
